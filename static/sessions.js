@@ -7075,7 +7075,7 @@ function _attachChildSessionsToSidebarRows(collapsedRows, rawSessions, rawRefere
     const nextPriority=priorityFor(String(childAttention.kind));
     const currentPriority=current?priorityFor(String(current.kind)):0;
     if(!current||nextPriority>currentPriority||(nextPriority===currentPriority&&Number(childAttention.count||0)>Number(current.count||0))){
-      parentRow._child_session_attention={...childAttention};
+      parentRow._child_session_attention={...childAttention,session_id:childRow.session_id};
     }
   };
   const visibleBySid=new Map();
@@ -8684,6 +8684,25 @@ function renderSessionListFromCache(){
     const attentionDotClass=attention?(attention.kind==='approval'?' is-attention-approval':(attention.kind==='clarify'?' is-attention-clarify':' is-attention-generic')):'';
     state.className='session-attention-indicator session-state-indicator'+(isStreaming?' is-streaming':(hasUnread?' is-unread':''))+attentionDotClass;
     state.setAttribute('aria-hidden','true');
+    const attentionChild=s._child_session_attention&&s._child_session_attention.session_id&&Array.isArray(s._child_sessions)
+      ? s._child_sessions.find(child=>child&&child.session_id===s._child_session_attention.session_id)
+      : null;
+    if(attentionChild){
+      state.classList.add('is-actionable');
+      state.removeAttribute('aria-hidden');
+      state.setAttribute('role','button');
+      state.setAttribute('tabindex','0');
+      state.setAttribute('aria-label','Open child session requiring attention');
+      const openAttentionChild=async(e)=>{
+        e.preventDefault();
+        e.stopPropagation();
+        await _openSidebarSession(attentionChild, {skipLineageResolve:true});
+      };
+      state.onclick=openAttentionChild;
+      state.onkeydown=(e)=>{
+        if(e.key==='Enter'||e.key===' ') openAttentionChild(e);
+      };
+    }
     // Tooltip precedence: a localized attention title (pending approval/clarify,
     // from the attention-indicator feature) is more specific and actionable than
     // the generic running/unread state tooltip, so it wins. Fall back to the state

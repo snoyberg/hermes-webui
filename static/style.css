@@ -1666,7 +1666,8 @@
   .session-item.active .session-meta{color:var(--accent-text);opacity:.8;}
   .session-state-indicator{display:inline-flex;align-items:center;justify-content:center;flex-shrink:0;width:10px;height:10px;color:var(--accent);visibility:hidden;}
   .session-attention-indicator{position:absolute;right:6px;top:50%;transform:translateY(-50%);width:26px;height:26px;z-index:1;pointer-events:none;transition:opacity .15s ease,visibility .15s ease;}
-  .session-item:hover .session-attention-indicator,.session-item:focus-within .session-attention-indicator,.session-item.menu-open .session-attention-indicator{opacity:0;visibility:hidden;}
+  .session-attention-indicator.is-actionable{pointer-events:auto;cursor:pointer;z-index:2;}
+  .session-item:hover .session-attention-indicator:not(.is-actionable),.session-item:focus-within .session-attention-indicator:not(.is-actionable),.session-item.menu-open .session-attention-indicator:not(.is-actionable){opacity:0;visibility:hidden;}
   .session-state-indicator.is-streaming,.session-state-indicator.is-unread,.session-state-indicator.is-attention-approval,.session-state-indicator.is-attention-clarify,.session-state-indicator.is-attention-generic{visibility:visible;}
   .session-state-indicator.is-attention-approval{color:var(--error);}
   .session-state-indicator.is-attention-clarify{color:var(--warning);}
