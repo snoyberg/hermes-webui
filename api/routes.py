@@ -1471,6 +1471,23 @@ def _cron_output_content_window(text: str, limit: int = _CRON_OUTPUT_CONTENT_LIM
 
 
 
+_CRON_COMPLETION_ATTENTION_POLICIES = frozenset({"all", "failures", "never"})
+
+
+def _normalize_cron_completion_attention(value) -> str:
+    """Return a supported persisted completion-attention policy.
+
+    Missing legacy values retain the prior all-completions behavior. Invalid
+    client input is rejected rather than silently persisting an unusable policy.
+    """
+    if value is None:
+        return "all"
+    normalized = str(value).strip().lower()
+    if normalized not in _CRON_COMPLETION_ATTENTION_POLICIES:
+        raise ValueError("completion_attention must be all, failures, or never")
+    return normalized
+
+
 def _cron_job_for_api(job: dict) -> dict:
     """Return a cron job payload with optional UI settings normalized.
 
@@ -1485,6 +1502,12 @@ def _cron_job_for_api(job: dict) -> dict:
     payload = dict(job or {})
     payload.setdefault("profile", None)
     payload["toast_notifications"] = payload.get("toast_notifications") is not False
+    try:
+        payload["completion_attention"] = _normalize_cron_completion_attention(payload.get("completion_attention"))
+    except ValueError:
+        # A manually edited legacy job must stay displayable; retain its previous
+        # all-completions semantics until the user picks a valid policy in WebUI.
+        payload["completion_attention"] = "all"
     return payload
 
 
@@ -21962,6 +21985,7 @@ def _handle_cron_recent(handler, parsed):
                         "status": job.get("last_status", "unknown"),
                         "completed_at": ts,
                         "toast_notifications": job.get("toast_notifications") is not False,
+                        "completion_attention": _cron_job_for_api(job)["completion_attention"],
                     }
                 )
         latest_session_info = _latest_cron_session_info_for_jobs(
@@ -24697,6 +24721,7 @@ def _handle_cron_create(handler, body):
 
         profile = _normalize_cron_profile_value(body.get("profile"))
         toast_notifications = body.get("toast_notifications") is not False
+        completion_attention = _normalize_cron_completion_attention(body.get("completion_attention"))
         requested_model = body.get("model") or None
         requested_provider = body.get("provider") or None
         job = create_job(
@@ -24720,6 +24745,8 @@ def _handle_cron_create(handler, body):
             )
         if not toast_notifications:
             post_create_updates["toast_notifications"] = False
+        if completion_attention != "all":
+            post_create_updates["completion_attention"] = completion_attention
         if post_create_updates:
             job = update_job(job["id"], post_create_updates) or job
         return j(handler, {"ok": True, "job": _cron_job_for_api(job)})
@@ -24756,6 +24783,8 @@ def _handle_cron_update(handler, body):
                 continue
             if k == "profile":
                 updates[k] = _normalize_cron_profile_value(v)
+            elif k == "completion_attention":
+                updates[k] = _normalize_cron_completion_attention(v)
             elif k in ("model", "provider"):
                 updates[k] = v if v else None
             elif v is not None:

@@ -1275,7 +1275,9 @@ function _markPollingCompletionUnreadTransitions(sessions) {
       )
     );
     const completedPersistedObservedStream = !cronRunning && Boolean(observedStreaming && !isStreaming);
-    if (completedObservedStream || completedPersistedObservedStream || completedWithNewMessages) {
+    const cronCompletionAttention=['all','failures','never'].includes(s.cron_completion_attention) ? s.cron_completion_attention : 'all';
+    const cronCompletionNeedsAttention=cronCompletionAttention==='all'||(cronCompletionAttention==='failures'&&s.cron_last_status==='error');
+    if ((completedObservedStream || completedPersistedObservedStream || completedWithNewMessages) && cronCompletionNeedsAttention) {
       if (!_isSessionActivelyViewedForList(sid)) {
         // Tag cron session-list markers with source+profile so profile-switch
         // reset can clear only inactive-profile cron dots (#5960 / #5975 re-gate).

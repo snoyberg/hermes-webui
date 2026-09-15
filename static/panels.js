@@ -1273,6 +1273,8 @@ function _renderCronDetail(job){
         <p>Switch to ${esc(ownerProfileLabel)} to run, edit, or inspect live status and output for this cron job.</p>
       </div>` : '';
   const toastNotifications = job.toast_notifications !== false;
+  const completionAttention=['all','failures','never'].includes(job.completion_attention) ? job.completion_attention : 'all';
+  const completionAttentionLabel=completionAttention==='failures' ? (t('cron_completion_attention_failures') || 'Failures only') : completionAttention==='never' ? (t('cron_completion_attention_never') || 'Never') : (t('cron_completion_attention_all') || 'All completions');
   const outputTitle = _cronOutputTitle(job);
   const skillsRow = isNoAgent ? '' : `<div class="detail-row"><div class="detail-row-label">${esc(t('cron_skills_label') || 'Skills')}</div><div class="detail-row-value">${esc(skills)}</div></div>`;
   const instructionCard = isNoAgent ? _cronScriptCardHtml(job) : _cronAgentPromptCardHtml(job);
@@ -1292,6 +1294,7 @@ function _renderCronDetail(job){
         ${showOwnerRow ? `<div class="detail-row"><div class="detail-row-label">Owner profile</div><div class="detail-row-value"><span class="detail-badge active" title="${esc(ownerProfileTitle)}">${esc(ownerProfileLabel)}</span></div></div>` : ''}
         <div class="detail-row"><div class="detail-row-label">${esc(t('cron_profile_label') || 'Profile')}</div><div class="detail-row-value"><span class="detail-badge active" title="${esc(profileTitle)}">${esc(profileLabel)}</span></div></div>
         <div class="detail-row"><div class="detail-row-label">${esc(t('cron_toast_notifications_label') || 'Completion toasts')}</div><div class="detail-row-value"><span class="detail-badge ${toastNotifications ? 'active' : ''}">${esc(toastNotifications ? (t('cron_toast_notifications_enabled') || 'Enabled') : (t('cron_toast_notifications_disabled') || 'Disabled'))}</span></div></div>
+        <div class="detail-row"><div class="detail-row-label">${esc(t('cron_completion_attention_label') || 'Tasks badge')}</div><div class="detail-row-value">${esc(completionAttentionLabel)}</div></div>
         ${skillsRow}
         ${lastError}
       </div>
@@ -1534,6 +1537,7 @@ function duplicateCurrentCron(){
     deliver: job.deliver || 'local',
     profile: job.profile || '',
     toast_notifications: job.toast_notifications !== false,
+    completion_attention: job.completion_attention || 'all',
     no_agent: !!job.no_agent,
     script: job.script || '',
     model: job.model || '',
@@ -1595,6 +1599,7 @@ function openCronEdit(job){
     deliver: job.deliver || 'local',
     profile: job.profile || '',
     toast_notifications: job.toast_notifications !== false,
+    completion_attention: job.completion_attention || 'all',
     no_agent: !!job.no_agent,
     script: job.script || '',
     model: job.model || '',
@@ -1609,13 +1614,14 @@ function openCronEdit(job){
   loadCronProfiles().then(()=>_refreshCronProfileSelect(job.profile || '')).catch(()=>{});
 }
 
-function _renderCronForm({ name, schedule, prompt, deliver, profile, toast_notifications=true, no_agent=false, script='', model='', provider='', isEdit }){
+function _renderCronForm({ name, schedule, prompt, deliver, profile, toast_notifications=true, completion_attention='all', no_agent=false, script='', model='', provider='', isEdit }){
   const title = $('taskDetailTitle');
   const body = $('taskDetailBody');
   const empty = $('taskDetailEmpty');
   if (!body || !title) return;
   const isNoAgent = !!no_agent;
   const toastNotifications = toast_notifications !== false;
+  const completionAttention=['all','failures','never'].includes(completion_attention) ? completion_attention : 'all';
   title.textContent = isEdit ? (t('edit') + ' · ' + (name || schedule || t('scheduled_jobs'))) : t('new_job');
   const promptBlock = isNoAgent ? '' : `
         <div class="detail-form-row">
@@ -1717,6 +1723,15 @@ function _renderCronForm({ name, schedule, prompt, deliver, profile, toast_notif
             <input type="checkbox" id="cronFormToastNotifications" ${toastNotifications ? 'checked' : ''}>
             <span>${esc(t('cron_toast_notifications_hint') || 'Show a toast when this cron finishes.')}</span>
           </label>
+        </div>
+        <div class="detail-form-row">
+          <label for="cronFormCompletionAttention">${esc(t('cron_completion_attention_label') || 'Tasks badge')}</label>
+          <select id="cronFormCompletionAttention">
+            <option value="all" ${completionAttention === 'all' ? 'selected' : ''}>${esc(t('cron_completion_attention_all') || 'All completions')}</option>
+            <option value="failures" ${completionAttention === 'failures' ? 'selected' : ''}>${esc(t('cron_completion_attention_failures') || 'Failures only')}</option>
+            <option value="never" ${completionAttention === 'never' ? 'selected' : ''}>${esc(t('cron_completion_attention_never') || 'Never')}</option>
+          </select>
+          <div class="detail-form-hint">${esc(t('cron_completion_attention_hint') || 'Choose which completions become unread in the Tasks tab.')}</div>
         </div>
         ${skillsBlock}
         <div id="cronFormError" class="detail-form-error" style="display:none"></div>
@@ -1907,6 +1922,7 @@ async function saveCronForm(){
   const delivEl=$('cronFormDeliver');
   const profileEl=$('cronFormProfile');
   const toastEl=$('cronFormToastNotifications');
+  const completionAttentionEl=$('cronFormCompletionAttention');
   const errEl=$('cronFormError');
   if(!schEl||!errEl) return;
   const isNoAgent = !!(_cronPreFormDetail && _cronPreFormDetail.no_agent);
@@ -1917,6 +1933,7 @@ async function saveCronForm(){
   const deliver=delivEl?delivEl.value:'local';
   const profile=profileEl?profileEl.value:'';
   const toastNotifications=toastEl?!!toastEl.checked:true;
+  const completionAttention=completionAttentionEl&&['all','failures','never'].includes(completionAttentionEl.value) ? completionAttentionEl.value : 'all';
   errEl.style.display='none';
   if(!schedule){errEl.textContent=t('cron_schedule_required_example');errEl.style.display='';return;}
   if(!isNoAgent && !prompt){errEl.textContent=t('cron_prompt_required');errEl.style.display='';return;}
@@ -1925,7 +1942,7 @@ async function saveCronForm(){
     const modelLoaded = !!(modelEl && modelEl.dataset.loaded === '1');
     const selectedModel = modelEl ? (modelEl.value || '').trim() : '';
     if (_editingCronId) {
-      const updates = {job_id: _editingCronId, schedule, profile: profile, toast_notifications: toastNotifications};
+      const updates = {job_id: _editingCronId, schedule, profile: profile, toast_notifications: toastNotifications, completion_attention: completionAttention};
       if (!isNoAgent) updates.prompt = prompt;
       if (name) updates.name = name;
       if (deliver) updates.deliver = deliver;
@@ -1952,7 +1969,7 @@ async function saveCronForm(){
       if (job) openCronDetail(job);
       return;
     }
-    const body={schedule,prompt,deliver,profile: profile, toast_notifications: toastNotifications};
+    const body={schedule,prompt,deliver,profile: profile, toast_notifications: toastNotifications, completion_attention: completionAttention};
     if(_cronIsDuplicate) body.enabled=false;
     if(name)body.name=name;
     if(_cronSelectedSkills.length)body.skills=_cronSelectedSkills;
@@ -12971,8 +12988,10 @@ function startCronPolling(){
             showToast(t('cron_completion_status', c.name, c.status==='error' ? t('status_failed') : t('status_completed')),4000);
           }
           _cronPollSince=Math.max(_cronPollSince,c.completed_at);
-          if(c.job_id) _cronNewJobIds.add(String(c.job_id));
-          if(c.session_id && typeof _markSessionCompletionUnreadIfBackground === 'function'){
+          const completionAttention=['all','failures','never'].includes(c.completion_attention) ? c.completion_attention : 'all';
+          const needsAttention=completionAttention==='all'||(completionAttention==='failures'&&c.status==='error');
+          if(needsAttention&&c.job_id) _cronNewJobIds.add(String(c.job_id));
+          if(needsAttention&&c.session_id && typeof _markSessionCompletionUnreadIfBackground === 'function'){
             const activeProfile=(typeof S!=='undefined'&&S&&S.activeProfile)||'default';
             _markSessionCompletionUnreadIfBackground(c.session_id, c.message_count, {
               source:'cron',

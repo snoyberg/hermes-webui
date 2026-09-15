@@ -163,6 +163,33 @@ def _session_list_cache_running_cron_jobs() -> dict[str, float]:
         return {}
 
 
+def _session_list_cache_cron_completion_attention() -> list[tuple[str, str, str]]:
+    """Return cron session-id prefixes with their persisted attention policies.
+
+    The sidebar has an independent completion detector, so this metadata must
+    accompany its session rows rather than relying on the Tasks poll arriving
+    first. Missing or unreadable job metadata preserves legacy all-completions
+    behavior.
+    """
+    try:
+        from cron.jobs import list_jobs
+
+        policies = []
+        for job in list_jobs(include_disabled=True):
+            job_id = str(job.get("id") or "").strip()
+            if not job_id:
+                continue
+            policy = str(job.get("completion_attention") or "all").strip().lower()
+            policies.append((
+                job_id,
+                policy if policy in {"all", "failures", "never"} else "all",
+                str(job.get("last_status") or "unknown").strip().lower(),
+            ))
+        return policies
+    except Exception:
+        return []
+
+
 def _session_list_cache_resolved_source_stamp(key: tuple):
     try:
         import api.routes as _routes
@@ -495,6 +522,10 @@ def _session_list_cache_overlay_runtime_rows(rows: list[dict]) -> list[dict]:
         running_cron_jobs = _session_list_cache_running_cron_jobs()
     except Exception:
         running_cron_jobs = {}
+    try:
+        cron_completion_attention = _session_list_cache_cron_completion_attention()
+    except Exception:
+        cron_completion_attention = []
     cron_job_prefixes = [(jid, f"cron_{jid}_", started_at) for jid, started_at in running_cron_jobs.items()]
     session_ids = [
         str(row.get("session_id") or "").strip()
@@ -537,9 +568,28 @@ def _session_list_cache_overlay_runtime_rows(rows: list[dict]) -> list[dict]:
         item["cron_running"] = _session_list_row_cron_running(
             sid, item, cron_job_prefixes
         )
+        cron_completion = _session_list_row_cron_completion_attention(
+            sid, cron_completion_attention
+        )
+        if cron_completion is not None:
+            item["cron_completion_attention"] = cron_completion["policy"]
+            item["cron_last_status"] = cron_completion["status"]
         overlaid.append(item)
     overlaid.sort(key=_session_list_runtime_sort_key, reverse=True)
     return overlaid
+
+
+def _session_list_row_cron_completion_attention(
+    sid: str, cron_completion_attention: list[tuple[str, str, str]]
+) -> dict[str, str] | None:
+    """Return the owning cron job's attention policy for an exact run session."""
+    if not sid or not cron_completion_attention:
+        return None
+    for job_id, policy, status in sorted(cron_completion_attention, key=lambda item: len(item[0]), reverse=True):
+        prefix = f"cron_{job_id}_"
+        if sid.startswith(prefix) and _CRON_RUN_TS_RE.fullmatch(sid[len(prefix):]):
+            return {"policy": policy, "status": status}
+    return None
 
 
 def _session_list_row_cron_running(

@@ -146,6 +146,30 @@ def _cron_row(sid, created_at, **overrides):
     return row
 
 
+def test_overlay_exposes_exact_cron_completion_attention(monkeypatch):
+    import api.route_session_list_cache as slc
+
+    monkeypatch.setattr(slc, "_session_list_cache_active_stream_ids", lambda: set())
+    monkeypatch.setattr(slc, "_session_list_cache_running_cron_jobs", lambda: {})
+    monkeypatch.setattr(
+        slc,
+        "_session_list_cache_cron_completion_attention",
+        lambda: [("backup", "failures", "error"), ("backup_full", "never", "success")],
+    )
+
+    rows = slc._session_list_cache_overlay_runtime_rows(
+        [
+            _cron_row("cron_backup_20260803_100000", created_at=1100),
+            _cron_row("cron_backup_full_20260803_100000", created_at=1100),
+        ]
+    )
+    by_sid = {row["session_id"]: row for row in rows}
+    assert by_sid["cron_backup_20260803_100000"]["cron_completion_attention"] == "failures"
+    assert by_sid["cron_backup_20260803_100000"]["cron_last_status"] == "error"
+    assert by_sid["cron_backup_full_20260803_100000"]["cron_completion_attention"] == "never"
+    assert by_sid["cron_backup_full_20260803_100000"]["cron_last_status"] == "success"
+
+
 def test_overlay_marks_current_running_cron_row(monkeypatch):
     import api.routes as routes
     import api.route_session_list_cache as slc
@@ -380,3 +404,29 @@ console.log(JSON.stringify({
     assert m["streamWhileRunning"] is True, "row must render active while cron_running"
     assert m["streamAfterClear"] is False
     assert m["markedSids"] == ["cron_job6728_20260803_100000"]
+
+
+def test_cron_completion_policy_gates_independent_sidebar_unread_transition():
+    """The session poll must honor the same policy as the Tasks completion poll."""
+    js = SESSIONS_JS_PATH.read_text(encoding="utf-8")
+    source = _extract_func_script(js) + _js_prelude() + r"""
+eval(extractFunc('_hasPendingUserMessageSignal'));
+eval(extractFunc('_isSessionLocallyStreaming'));
+eval(extractFunc('_isSessionEffectivelyStreaming'));
+eval(extractFunc('_markPollingCompletionUnreadTransitions'));
+function transition(sid, policy, status) {
+  _sessionListSnapshotById.set(sid, { message_count: 1, last_message_at: 1000 });
+  _sessionStreamingById.set(sid, true);
+  _markPollingCompletionUnreadTransitions([{
+    session_id: sid, cron_running: false, is_streaming: false,
+    message_count: 2, last_message_at: 1100,
+    cron_completion_attention: policy, cron_last_status: status,
+  }]);
+}
+transition('cron_success', 'failures', 'success');
+transition('cron_error', 'failures', 'error');
+transition('cron_never', 'never', 'error');
+console.log(JSON.stringify({ markedSids }));
+"""
+    m = json.loads(_run_node(source))
+    assert m["markedSids"] == ["cron_error"]

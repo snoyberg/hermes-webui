@@ -301,7 +301,7 @@ If an AI assistant is helping with install, reinstall, bootstrap, provider setup
 
 ### Panels
 - **Chat** -- session list, search, pin, archive, projects, new conversation
-- **Tasks** -- view, create, edit, run, pause/resume, delete cron jobs; run history; completion alerts
+- **Tasks** -- view, create, edit, run, pause/resume, delete cron jobs; run history; completion alerts; choose whether all completions, failures only, or no completions create a Tasks unread badge
 - **Skills** -- list all skills by category, search, preview, create/edit/delete; linked files viewer
 - **Memory** -- view and edit MEMORY.md and USER.md inline
 - **Profiles** -- create, switch, delete agent profiles; clone config
