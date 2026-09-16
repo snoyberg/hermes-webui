@@ -23559,6 +23559,13 @@ def start_session_turn(
         profile_provider=_pp_provider,
         profile_default_model=_pp_default,
         profile_config=_pp_cfg,
+        # A server-initiated turn carries no user pick, so without this the
+        # resolver reads the session's own cross-family model as a stale
+        # artifact and substitutes the profile default. A wakeup would then
+        # silently move a session the user had deliberately placed on another
+        # provider, and the moved value persists into every later turn. The
+        # wakeup continues the session's route; it does not choose one.
+        explicit_model_pick=(turn_source == "process_wakeup" and bool(requested_model)),
         prefer_cached_catalog=True,
     )
     _paused_wakeup_response = None
