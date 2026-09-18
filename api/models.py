@@ -7712,10 +7712,12 @@ def _load_cli_sessions_uncached(
             else CLI_VISIBLE_SESSION_LIMIT
         ),
         log=logger,
-        # Background sources have independent bounded passes below. Keeping them
-        # out of this 20-row interactive window prevents a busy worker source
-        # (especially kanban) from evicting every CLI/TUI/ACP conversation.
-        exclude_sources=("cron", "webhook", "kanban") if source_filter is None else None,
+        # Background/internal sources have independent bounded passes or are not
+        # user-facing. Keeping them out of this interactive window prevents a
+        # busy worker source from evicting user conversations, and preserves
+        # Hermes Agent's --source tool contract: integration runs are durable
+        # for auditability but absent from user session lists.
+        exclude_sources=("cron", "webhook", "kanban", "tool") if source_filter is None else None,
         include_sources=None if source_filter is None else (source_filter,),
     ):
         sid = row['id']

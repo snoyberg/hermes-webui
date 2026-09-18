@@ -39,7 +39,7 @@ def _snapshot_hash(sessions: list) -> str:
 # ``exclude_sources`` used by ``read_importable_agent_session_rows`` so the
 # cheap change-detection scan below sees exactly the same row set as the
 # expensive projection (otherwise cron message churn would defeat the gate).
-_WATCHER_EXCLUDED_SOURCES = ("cron", "webui")
+_WATCHER_EXCLUDED_SOURCES = ("cron", "webui", "tool")
 
 
 def _cheap_change_fingerprint(db_path: Path) -> str | None:
@@ -54,7 +54,7 @@ def _cheap_change_fingerprint(db_path: Path) -> str | None:
 
     This hashes every sessions-table column the projection uses, plus a
     per-session ``COUNT`` / ``MAX(messages.timestamp)`` aggregate scoped to the
-    same non-cron/webui rows. The message aggregate stays on the agent's existing
+    same non-cron/webui/tool rows. The message aggregate stays on the agent's existing
     ``(session_id, timestamp)`` covering index, avoiding a table-page lookup for
     every historical message.
 

@@ -219,7 +219,7 @@ def test_cheap_fingerprint_stable_and_sensitive(tmp_path):
 
 
 def test_cheap_fingerprint_ignores_excluded_sources(tmp_path):
-    """cron/webui churn must not invalidate the fingerprint (matches projection scope)."""
+    """cron/webui/tool churn must not invalidate the fingerprint (matches projection scope)."""
     gw = importlib.import_module("api.gateway_watcher")
     db, conn = _make_db(tmp_path)
     _add_session(conn, "tg1", "telegram", mc=2)
@@ -235,6 +235,11 @@ def test_cheap_fingerprint_ignores_excluded_sources(tmp_path):
     _add_session(conn, "webui1", "webui", mc=20)
     fp3 = gw._cheap_change_fingerprint(db)
     assert fp3 == fp1
+
+    # Internal integration/tool runs are durable but not user-facing.
+    _add_session(conn, "tool1", "tool", mc=20)
+    fp4 = gw._cheap_change_fingerprint(db)
+    assert fp4 == fp1
 
 
 def test_cheap_fingerprint_detects_source_change(tmp_path):

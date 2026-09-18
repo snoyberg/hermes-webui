@@ -2337,6 +2337,12 @@ def _build_session_list_cache_payload(
     show_webhook_sessions = bool(show_webhook_sessions)
     show_kanban_sessions = bool(show_kanban_sessions)
     webui_sessions = [_normalize_sidebar_source_flags(s) for s in webui_sessions]
+    # Integration runs launched with ``hermes --source tool`` are durable for
+    # diagnostics but are not user conversations. Older WebUI versions could
+    # materialize them as JSON sidecars; suppress those persisted copies too,
+    # while retaining the explicit source-filter diagnostic path.
+    if source_filter != "tool":
+        webui_sessions = [s for s in webui_sessions if not _session_source_is_tool(s)]
     if show_cli_sessions:
         diag_stage("get_cli_sessions")
         if _callable_accepts_kwarg(get_cli_sessions, "include_claude_code"):
@@ -10057,6 +10063,16 @@ def _session_source_is_webui(session: dict) -> bool:
         if str(session.get(key) or "").strip().lower() == "webui":
             return True
     return False
+
+
+def _session_source_is_tool(session: dict) -> bool:
+    """Return True for internal integration sessions launched as source=tool."""
+    if not isinstance(session, dict):
+        return False
+    return any(
+        _normalized_source_marker(session.get(key)) == "tool"
+        for key in ("source", "source_tag", "raw_source", "session_source", "source_label")
+    )
 
 
 def _normalized_source_marker(value) -> str:
