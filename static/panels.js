@@ -12309,6 +12309,7 @@ async function checkUpdatesNow(channelOverride){
         // Also trigger the update banner
         if(typeof _showUpdateBanner==='function') _showUpdateBanner(data);
       } else if(errorParts.length){
+        if(typeof _clearUpdateOffer==='function') _clearUpdateOffer();
         if(status){status.textContent=t('settings_update_check_failed')+': '+errorParts.join(', ');status.style.color='var(--error)';}
       } else if(noGitParts.length){
         if(status){status.textContent=t('settings_update_no_git');status.style.color='var(--muted)';}
@@ -12318,6 +12319,7 @@ async function checkUpdatesNow(channelOverride){
       }
     }
   } catch(e){
+    if(typeof _clearUpdateOffer==='function') _clearUpdateOffer();
     // Never expose raw e.message in UI — log to console for debugging only
     console.warn('[checkUpdatesNow]', e);
     // Show a generic user-facing error; if the API returned a message body use it

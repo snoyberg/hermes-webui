@@ -839,9 +839,101 @@ def _run_trusted_git_input(args, cwd, stdin_text, *, timeout=10):
     )
 
 
+def _kaladin_git_directory(path: Path) -> Path | None:
+    """Resolve the checkout's own git directory without Git discovery."""
+    work_tree = Path(path).resolve()
+    marker = work_tree / '.git'
+    if marker.is_dir():
+        return marker.resolve()
+    if not marker.is_file():
+        return None
+    try:
+        text = marker.read_text(encoding='utf-8').strip()
+    except OSError:
+        return None
+    prefix = 'gitdir:'
+    if not text.lower().startswith(prefix):
+        return None
+    git_dir = Path(text[len(prefix):].strip())
+    if not git_dir.is_absolute():
+        git_dir = marker.parent / git_dir
+    try:
+        git_dir = git_dir.resolve(strict=True)
+    except OSError:
+        return None
+    return git_dir if git_dir.is_dir() else None
+
+
+def _kaladin_git_command(args, path):
+    """Build a Git command pinned to the intended Kaladin checkout."""
+    git_executable = _resolve_git_executable()
+    git_dir = _kaladin_git_directory(Path(path))
+    if not git_executable:
+        return None, 'git executable not found'
+    if git_dir is None:
+        return None, 'Could not resolve the intended git directory'
+    work_tree = Path(path).resolve()
+    return [
+        git_executable,
+        f'--git-dir={git_dir}',
+        f'--work-tree={work_tree}',
+        '-c', f'core.worktree={work_tree}',
+        '-c', f'core.hooksPath={os.devnull}',
+        '-c', 'core.fsmonitor=false',
+        '-c', 'core.askPass=',
+        '-c', 'credential.helper=',
+        '-c', 'protocol.ext.allow=never',
+        *args,
+    ], None
+
+
+def _run_kaladin_git(args, path, *, timeout=15):
+    """Run a checkout operation inside the hardened Kaladin Git boundary."""
+    command, error = _kaladin_git_command(args, path)
+    if command is None:
+        return error, False
+    try:
+        result = subprocess.run(
+            command, cwd=str(Path(path).resolve()), env=_trusted_git_env(),
+            stdin=subprocess.DEVNULL, capture_output=True, text=True,
+            timeout=timeout, encoding='utf-8', errors='replace',
+            creationflags=windows_hide_flags(),
+        )
+    except subprocess.TimeoutExpired:
+        return f"git {args[0]} timed out after {timeout}s", False
+    except OSError as exc:
+        return f'git failed to start: {exc}', False
+    stdout = (result.stdout or '').strip()
+    stderr = (result.stderr or '').strip()
+    if result.returncode == 0:
+        return stdout, True
+    return stderr or stdout or f'git exited with status {result.returncode}', False
+
+
+def _run_kaladin_git_input(args, path, stdin_text, *, timeout=10):
+    """Run a hardened Kaladin Git command with transactional stdin."""
+    command, error = _kaladin_git_command(args, path)
+    if command is None:
+        return error, False
+    try:
+        result = subprocess.run(
+            command, cwd=str(Path(path).resolve()), env=_trusted_git_env(),
+            input=stdin_text, capture_output=True, text=True, timeout=timeout,
+            encoding='utf-8', errors='replace',
+            creationflags=windows_hide_flags(),
+        )
+    except (subprocess.TimeoutExpired, OSError) as exc:
+        return f'git failed: {exc}', False
+    stdout = (result.stdout or '').strip()
+    stderr = (result.stderr or '').strip()
+    return (stdout, True) if result.returncode == 0 else (
+        stderr or stdout or f'git exited with status {result.returncode}', False
+    )
+
+
 def _kaladin_release_refs(path) -> list[tuple[str, str]]:
     """Return authoritative Kaladin tag names and pinned commit IDs."""
-    out, ok = _run_trusted_git([
+    out, ok = _run_kaladin_git([
         'for-each-ref', '--format=%(refname:strip=4) %(objectname)',
         _KALADIN_REF_PREFIX,
     ], path)
@@ -891,7 +983,7 @@ def _fetch_kaladin_tags(path, *, quiet=True, timeout=15):
                 out, ok = _run_trusted_git(['bundle', 'create', str(bundle), *full_refs], bare, timeout=timeout)
                 if not ok:
                     return out, False
-                out, ok = _run_trusted_git(
+                out, ok = _run_kaladin_git(
                     ['bundle', 'unbundle', str(bundle)], path, timeout=timeout,
                 )
                 if not ok:
@@ -910,7 +1002,7 @@ def _fetch_kaladin_tags(path, *, quiet=True, timeout=15):
                 if name not in fetched:
                     transaction.append(f'delete {_KALADIN_REF_PREFIX}{name} {oid}')
             transaction.extend(['prepare', 'commit', ''])
-            out, ok = _run_trusted_git_input(
+            out, ok = _run_kaladin_git_input(
                 ['update-ref', '--stdin'], path, '\n'.join(transaction), timeout=timeout,
             )
             if not ok:
@@ -1145,7 +1237,7 @@ def _head_is_past_latest_tag(path, current_tag, channel=DEFAULT_UPDATE_CHANNEL):
     return bool(ok and full_desc and full_desc != current_tag)
 
 
-def _head_contains_ref(path, ref):
+def _head_contains_ref(path, ref, *, trusted=False):
     """Return True when ``ref`` is an ancestor of HEAD.
 
     Release-channel checks are tag-name based, but users tracking ``main`` can
@@ -1155,15 +1247,17 @@ def _head_contains_ref(path, ref):
     """
     if not ref:
         return False
-    _, ok = _run_git(['merge-base', '--is-ancestor', ref, 'HEAD'], path)
+    run_git = _run_kaladin_git if trusted else _run_git
+    _, ok = run_git(['merge-base', '--is-ancestor', ref, 'HEAD'], path)
     return bool(ok)
 
 
-def _can_fast_forward_to(path, ref):
+def _can_fast_forward_to(path, ref, *, trusted=False):
     """Return True when ``ref`` is a descendant of HEAD (``git pull --ff-only`` can reach it)."""
     if not ref:
         return False
-    _, ok = _run_git(['merge-base', '--is-ancestor', 'HEAD', ref], path)
+    run_git = _run_kaladin_git if trusted else _run_git
+    _, ok = run_git(['merge-base', '--is-ancestor', 'HEAD', ref], path)
     return bool(ok)
 
 
@@ -1173,20 +1267,20 @@ def _kaladin_target_state(path) -> dict:
     if not refs:
         return {'status': 'absent', 'refs': []}
     latest_name, latest_oid = refs[0]
-    head_oid, head_ok = _run_git(['rev-parse', 'HEAD^{commit}'], path)
+    head_oid, head_ok = _run_kaladin_git(['rev-parse', 'HEAD^{commit}'], path)
     if not (head_ok and re.fullmatch(r'[0-9a-fA-F]{40,64}', head_oid or '')):
         return {'status': 'unverifiable', 'refs': refs}
     head_oid = head_oid.lower()
-    if _head_contains_ref(path, latest_oid):
+    if _head_contains_ref(path, latest_oid, trusted=True):
         status = 'current'
-    elif _can_fast_forward_to(path, latest_oid):
+    elif _can_fast_forward_to(path, latest_oid, trusted=True):
         status = 'update'
     else:
         status = 'divergent'
     current_name = None
     current_oid = head_oid
     for name, oid in refs:
-        if _head_contains_ref(path, oid):
+        if _head_contains_ref(path, oid, trusted=True):
             current_name, current_oid = name, oid
             break
     return {
@@ -1252,7 +1346,7 @@ def _check_kaladin_release(path, name):
         }
     tag_names = [tag_name for tag_name, _oid in state['refs']]
     behind = tag_names.index(current_name) if current_name in tag_names else sum(
-        1 for _tag_name, oid in state['refs'] if _can_fast_forward_to(path, oid)
+        1 for _tag_name, oid in state['refs'] if _can_fast_forward_to(path, oid, trusted=True)
     )
     return {
         'name': name, 'behind': max(1, behind),
@@ -1618,7 +1712,7 @@ def _check_repo(path, name, channel=DEFAULT_UPDATE_CHANNEL):
                 'error': message,
                 'stale_check': True,
                 'channel': channel,
-                'dirty': _is_dirty(path),
+                'dirty': _is_dirty(path, trusted=True),
             }
         release_info = _check_repo_release(path, name, channel)
         if release_info is not None:
@@ -1638,7 +1732,9 @@ def _check_repo(path, name, channel=DEFAULT_UPDATE_CHANNEL):
     release_info = _check_repo_release(path, name, channel)
     if release_info is not None:
         release_info = dict(release_info)
-        release_info['dirty'] = _is_dirty(path)
+        release_info['dirty'] = _is_dirty(
+            path, trusted=(name == 'webui' and channel == 'kaladin'),
+        )
         return release_info
 
     if name == 'webui' and channel == 'kaladin':
@@ -1647,7 +1743,7 @@ def _check_repo(path, name, channel=DEFAULT_UPDATE_CHANNEL):
             'behind': None,
             'error': 'No fast-forwardable Kaladin release tag is available.',
             'channel': channel,
-            'dirty': _is_dirty(path),
+            'dirty': _is_dirty(path, trusted=True),
         }
 
     branch_info = _check_repo_branch(path, name, fetch=False)
@@ -1661,9 +1757,11 @@ def _check_repo(path, name, channel=DEFAULT_UPDATE_CHANNEL):
 
 def _probe_dirty(
     path: Path, timeout: int = 1, *, legacy_empty_is_dirty: bool = False,
+    trusted: bool = False,
 ) -> bool | None:
     """Return dirty, clean, or unknown for a working-tree probe."""
-    out, ok = _run_git(['diff-index', '--quiet', 'HEAD', '--'], path, timeout=timeout)
+    run_git = _run_kaladin_git if trusted else _run_git
+    out, ok = run_git(['diff-index', '--quiet', 'HEAD', '--'], path, timeout=timeout)
     if ok:
         return False
     if out == 'git exited with status 1' or (legacy_empty_is_dirty and (not out or out.startswith('git exited with status '))):
@@ -1675,7 +1773,7 @@ def _probe_dirty(
     return None
 
 
-def _is_dirty(path: Path, timeout: int = 1) -> bool:
+def _is_dirty(path: Path, timeout: int = 1, *, trusted: bool = False) -> bool:
     """Return True when the working tree has uncommitted changes vs HEAD.
 
     Same primitive as ``_dirty_suffix`` (issue #4085): ``git diff-index
@@ -1687,7 +1785,7 @@ def _is_dirty(path: Path, timeout: int = 1) -> bool:
     # Older checker consumers model diff-index status 1 as ('', False). Keep
     # that boolean contract here; force updates use the strict tri-state form.
     return _probe_dirty(
-        path, timeout=timeout, legacy_empty_is_dirty=True,
+        path, timeout=timeout, legacy_empty_is_dirty=True, trusted=trusted,
     ) is True
 
 
@@ -2259,10 +2357,11 @@ def _agent_gateway_restart_failure_message(target: str, restart_result: dict) ->
     )
 
 
-def _discard_local_changes(path: Path, reset_ref: str) -> bool:
+def _discard_local_changes(path: Path, reset_ref: str, *, trusted: bool = False) -> bool:
     """Discard local changes and reset *path* to *reset_ref*."""
+    run_git = _run_kaladin_git if trusted else _run_git
     # Do not use -x: ignored build/cache artifacts should survive force update.
-    _run_git(['checkout', '.'], path)
+    run_git(['checkout', '.'], path)
     # Best-effort clean: a `git clean -fd` failure is NOT fatal. The
     # following `reset --hard` overwrites any tracked-file collisions
     # regardless, and residual untracked files that git can't delete are
@@ -2273,14 +2372,14 @@ def _discard_local_changes(path: Path, reset_ref: str) -> bool:
     # so `clean` exits non-zero. Aborting the whole force update over that
     # left users stuck (issue #4914). Log the stderr for diagnostics and
     # proceed to the reset, which is what actually applies the update.
-    clean_out, clean_ok = _run_git(['clean', '-fd'], path)
+    clean_out, clean_ok = run_git(['clean', '-fd'], path)
     if not clean_ok:
         logger.warning(
             'force_apply_update: `git clean -fd` failed (non-fatal, '
             'continuing to reset --hard): %s',
             clean_out,
         )
-    _, ok = _run_git(['reset', '--hard', reset_ref], path)
+    _, ok = run_git(['reset', '--hard', reset_ref], path)
     return ok
 
 
@@ -2291,9 +2390,9 @@ def _kaladin_tags_abandoned_by_reset(
     trusted_refs = _kaladin_release_refs(path) if refs is None else refs
     abandoned = []
     for name, oid in trusted_refs:
-        if not _head_contains_ref(path, oid):
+        if not _head_contains_ref(path, oid, trusted=True):
             continue
-        _, target_contains_tag = _run_git(
+        _, target_contains_tag = _run_kaladin_git(
             ['merge-base', '--is-ancestor', oid, target_oid], path,
         )
         if not target_contains_tag:
@@ -2431,7 +2530,7 @@ def apply_force_update(target: str, channel=None) -> dict:
         if (
             target == 'webui'
             and channel == 'kaladin'
-            and not _can_fast_forward_to(path, compare_ref)
+            and not _can_fast_forward_to(path, compare_ref, trusted=True)
         ):
             containing_tags = _kaladin_tags_abandoned_by_reset(path, compare_ref)
             if containing_tags:
@@ -2456,7 +2555,18 @@ def apply_force_update(target: str, channel=None) -> dict:
         # allowed. Refs on a divergent line (neither ancestor nor descendant) are
         # the legitimate force-update case (conflict/diverged recovery) and are
         # also allowed — the guard fires ONLY on a pure-ancestor rewind.
-        if _head_contains_ref(path, compare_ref) and not _can_fast_forward_to(path, compare_ref):
+        trusted_kaladin = target == 'webui' and channel == 'kaladin'
+        if trusted_kaladin:
+            refusing_rewind = (
+                _head_contains_ref(path, compare_ref, trusted=True)
+                and not _can_fast_forward_to(path, compare_ref, trusted=True)
+            )
+        else:
+            refusing_rewind = (
+                _head_contains_ref(path, compare_ref)
+                and not _can_fast_forward_to(path, compare_ref)
+            )
+        if refusing_rewind:
             return {
                 'ok': False,
                 'message': (
@@ -2469,7 +2579,7 @@ def apply_force_update(target: str, channel=None) -> dict:
                 'channel': channel,
                 'refused_rewind': True,
             }
-        if not _discard_local_changes(path, compare_ref):
+        if not _discard_local_changes(path, compare_ref, trusted=trusted_kaladin):
             return {'ok': False, 'message': f'Force reset to {compare_ref} failed'}
 
         with _cache_lock:
@@ -2521,6 +2631,8 @@ def _restore_stash_after_pull_failure(
     target: str,
     path: Path,
     pull_out: str,
+    *,
+    run_git=_run_git,
 ) -> str:
     """Best-effort re-apply of a stash pushed earlier in `_apply_update_inner`.
 
@@ -2532,15 +2644,15 @@ def _restore_stash_after_pull_failure(
 
     Returns a human-readable note for inclusion in the response message.
     """
-    _, pop_ok = _run_git(['stash', 'pop'], path)
+    _, pop_ok = run_git(['stash', 'pop'], path)
     if pop_ok:
         return ('Local modifications were restored from the temporary stash.')
 
     # `git stash pop` failed -- could be that the working tree changed under
     # us. Try apply + drop to keep the change separation explicit.
-    _, apply_ok = _run_git(['stash', 'apply'], path)
+    _, apply_ok = run_git(['stash', 'apply'], path)
     if apply_ok:
-        _, _ = _run_git(['stash', 'drop'], path)
+        _, _ = run_git(['stash', 'drop'], path)
         return ('Local modifications were restored from the temporary stash.')
 
     detail = (pull_out or '').strip()[:200]
@@ -2567,6 +2679,9 @@ def _apply_update_inner(target, channel=DEFAULT_UPDATE_CHANNEL):
 
     if path is None or not (path / '.git').exists():
         return {'ok': False, 'message': 'Not a git repository'}
+
+    trusted_kaladin = target == 'webui' and channel == 'kaladin'
+    run_git = _run_kaladin_git if trusted_kaladin else _run_git
 
     # Fetch before applying so the selected ref is current. Kaladin's fixed
     # source deliberately fails closed on moved tags; existing channels retain
@@ -2612,7 +2727,7 @@ def _apply_update_inner(target, channel=DEFAULT_UPDATE_CHANNEL):
 
     # Check for dirty working tree (ignore untracked files — git stash
     # doesn't include them, so stashing on '??' alone leaves nothing to pop)
-    status_out, status_ok = _run_git(
+    status_out, status_ok = run_git(
         ['status', '--porcelain', '--untracked-files=no'], path
     )
     if not status_ok:
@@ -2638,7 +2753,7 @@ def _apply_update_inner(target, channel=DEFAULT_UPDATE_CHANNEL):
         }
     stashed = False
     if status_out:
-        _, ok = _run_git(['stash', 'push', '-m', 'hermes-update-autostash'], path)
+        _, ok = run_git(['stash', 'push', '-m', 'hermes-update-autostash'], path)
         if not ok:
             return {'ok': False, 'message': 'Failed to stash local changes'}
         stashed = True
@@ -2656,7 +2771,7 @@ def _apply_update_inner(target, channel=DEFAULT_UPDATE_CHANNEL):
             pull_args.extend([remote, branch])
         else:
             pull_args.extend(['origin', compare_ref])
-    pull_out, pull_ok = _run_git(pull_args, path, timeout=30)
+    pull_out, pull_ok = run_git(pull_args, path, timeout=30)
     if not pull_ok:
         if _is_git_lock_error(pull_out):
             # Lock conflict during pull. If a stash was pushed for the local
@@ -2666,7 +2781,7 @@ def _apply_update_inner(target, channel=DEFAULT_UPDATE_CHANNEL):
             stash_recovery_note = ''
             if stashed:
                 stash_recovery_note = _restore_stash_after_pull_failure(
-                    target, path, pull_out
+                    target, path, pull_out, run_git=run_git,
                 )
             message = f'Pull failed due to a repository lock: {pull_out.strip()}'
             if stash_recovery_note:
@@ -2687,13 +2802,13 @@ def _apply_update_inner(target, channel=DEFAULT_UPDATE_CHANNEL):
         restored_stash = False
         stash_drop_failed = False
         if stashed:
-            _, apply_ok = _run_git(['stash', 'apply'], path)
+            _, apply_ok = run_git(['stash', 'apply'], path)
             if apply_ok:
-                _, drop_ok = _run_git(['stash', 'drop'], path)
+                _, drop_ok = run_git(['stash', 'drop'], path)
                 restored_stash = True
                 stash_drop_failed = not drop_ok
             else:
-                _, reset_ok = _run_git(['reset', '--hard', 'HEAD'], path)
+                _, reset_ok = run_git(['reset', '--hard', 'HEAD'], path)
                 if not reset_ok:
                     response = {
                         'ok': False,
@@ -2782,12 +2897,12 @@ def _apply_update_inner(target, channel=DEFAULT_UPDATE_CHANNEL):
     # Re-apply stash if we stashed.
     stash_drop_failed = False
     if stashed:
-        _, apply_ok = _run_git(['stash', 'apply'], path)
+        _, apply_ok = run_git(['stash', 'apply'], path)
         if apply_ok:
-            _, drop_ok = _run_git(['stash', 'drop'], path)
+            _, drop_ok = run_git(['stash', 'drop'], path)
             stash_drop_failed = not drop_ok
         else:
-            _, reset_ok = _run_git(['reset', '--hard', 'HEAD'], path)
+            _, reset_ok = run_git(['reset', '--hard', 'HEAD'], path)
             if not reset_ok:
                 return {
                     'ok': False,

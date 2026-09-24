@@ -10686,6 +10686,18 @@ function _renderUpdateWhatsNewLinks(data){
   }
   _appendUpdateDiffLinks(container,targets,"What's new: ");
 }
+function _clearUpdateOffer(){
+  window._updateData=null;
+  const banner=$('updateBanner');
+  if(banner) banner.classList.remove('visible');
+  const applyBtn=$('btnApplyUpdate');
+  if(applyBtn){applyBtn.disabled=true;applyBtn.style.display='none';}
+  for(const id of ['btnForceUpdate','btnClearUpdateLock']){
+    const btn=$(id);
+    if(btn){btn.disabled=true;btn.style.display='none';btn.dataset.target='';}
+  }
+  _renderUpdateWhatsNewLinks({});
+}
 function _showUpdateBanner(data){
   const parts=[];
   const webuiPart=_formatUpdateTargetStatus('WebUI',data.webui);
