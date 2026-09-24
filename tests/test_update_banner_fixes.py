@@ -2649,6 +2649,55 @@ class TestUpdateCompareSource:
         block = src[up_to_date_idx:up_to_date_idx + 300]
         assert "_showUpdateBanner(data)" in block
 
+    def test_failed_manual_check_clears_stale_offer_and_actions_before_error(self):
+        ui_src = read('static/ui.js')
+        panels_src = read('static/panels.js')
+        clear_fn = extract_js_function(ui_src, '_clearUpdateOffer')
+        check_fn = extract_js_function(panels_src, 'checkUpdatesNow')
+        script = f"""
+const state = {{
+  btnCheckUpdatesNow: {{ disabled: false }},
+  checkUpdatesLabel: {{ textContent: '' }},
+  checkUpdatesSpinner: {{ style: {{ display: 'none' }} }},
+  checkUpdatesStatus: {{ textContent: '', style: {{ color: '' }} }},
+  updateBanner: {{ classList: {{ remove(name) {{ this.removed = name; }} }} }},
+  btnApplyUpdate: {{ disabled: false, style: {{ display: '' }} }},
+  btnForceUpdate: {{ disabled: false, style: {{ display: 'inline-block' }}, dataset: {{ target: 'webui' }} }},
+  btnClearUpdateLock: {{ disabled: false, style: {{ display: 'inline-block' }}, dataset: {{ target: 'webui' }} }},
+}};
+global.window = {{ _updateData: {{ webui: {{ behind: 1 }} }} }};
+function $(id) {{ return state[id] || null; }}
+function t(key) {{ return key; }}
+function _renderUpdateWhatsNewLinks() {{}}
+function _formatUpdateCheckError(label, info) {{ return info&&info.error?label:null; }}
+function _formatUpdateTargetStatus() {{ return null; }}
+function _formatManualUpdateInstruction() {{ return null; }}
+let mode='response';
+async function api() {{
+  if(mode==='throw') throw new Error('network');
+  return {{ webui: {{ behind: 1, error: 'fetch failed' }}, agent: null }};
+}}
+{clear_fn}
+{check_fn}
+(async () => {{
+  await checkUpdatesNow();
+  if(window._updateData!==null) throw new Error('failed response retained stale update data');
+  if(state.updateBanner.classList.removed!=='visible') throw new Error('failed response left banner visible');
+  if(state.btnApplyUpdate.style.display!=='none'||state.btnApplyUpdate.disabled!==true) throw new Error('failed response left apply active');
+  if(state.btnForceUpdate.style.display!=='none'||state.btnForceUpdate.dataset.target!=='') throw new Error('failed response left force active');
+  if(state.btnClearUpdateLock.style.display!=='none'||state.btnClearUpdateLock.dataset.target!=='') throw new Error('failed response left lock action active');
+  window._updateData={{ webui: {{ behind: 1 }} }};
+  state.updateBanner.classList.removed='';
+  state.btnApplyUpdate.disabled=false; state.btnApplyUpdate.style.display='';
+  state.btnForceUpdate.disabled=false; state.btnForceUpdate.style.display='inline-block'; state.btnForceUpdate.dataset.target='webui';
+  mode='throw';
+  await checkUpdatesNow();
+  if(window._updateData!==null||state.updateBanner.classList.removed!=='visible') throw new Error('thrown failure retained stale offer');
+  if(state.btnApplyUpdate.style.display!=='none'||state.btnForceUpdate.style.display!=='none') throw new Error('thrown failure left actions visible');
+}})().catch(err => {{ console.error(err.message); process.exit(1); }});
+""".strip()
+        subprocess.run(["node", "-e", script], check=True, capture_output=True, text=True)
+
 
 class TestWhatsNewSummaryToggle:
     def test_settings_default_and_persistence_allow_whats_new_summary_toggle(self):
