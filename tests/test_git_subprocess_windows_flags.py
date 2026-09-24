@@ -13,7 +13,7 @@ EXPECTED_GIT_RUNS = Counter(
     {
         "api/agent_runtime.py": 3,
         "api/rollback.py": 4,
-        "api/updates.py": 1,
+        "api/updates.py": 2,
         "api/workspace.py": 1,
         "api/workspace_git.py": 2,
         "api/worktrees.py": 2,
