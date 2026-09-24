@@ -34,10 +34,15 @@ def _repo_with_kaladin_history(tmp_path):
     _git(source, "config", "user.email", "test@example.com")
     _git(source, "config", "user.name", "Test")
     _git(source, "remote", "add", "publish", str(remote))
-    _git(source, "commit", "--allow-empty", "-q", "-m", "base")
+    (source / "release.txt").write_text("v1\n", encoding="utf-8")
+    (source / "stable.txt").write_text("original\n", encoding="utf-8")
+    _git(source, "add", "release.txt", "stable.txt")
+    _git(source, "commit", "-q", "-m", "base")
     _git(source, "tag", "kaladin-v1.0.0")
     first = _git(source, "rev-parse", "HEAD", capture=True)
-    _git(source, "commit", "--allow-empty", "-q", "-m", "next")
+    (source / "release.txt").write_text("v2\n", encoding="utf-8")
+    _git(source, "add", "release.txt")
+    _git(source, "commit", "-q", "-m", "next")
     _git(source, "tag", "kaladin-v1.1.0")
     second = _git(source, "rev-parse", "HEAD", capture=True)
     _git(source, "push", "-q", "publish", "refs/tags/kaladin-v1.0.0", "refs/tags/kaladin-v1.1.0")
@@ -305,12 +310,80 @@ def test_kaladin_normal_apply_fast_forward_merges_selected_tag(tmp_path, monkeyp
     assert _git(checkout, "rev-parse", "HEAD", capture=True) == second
 
 
+def test_kaladin_force_apply_ignores_inherited_work_tree_and_updates_checkout(tmp_path, monkeypatch):
+    remote, _source, checkout, _first, second = _repo_with_kaladin_history(tmp_path)
+    redirected = tmp_path / "redirected"
+    redirected.mkdir()
+    (redirected / "release.txt").write_text("redirected\n", encoding="utf-8")
+    (checkout / "release.txt").write_text("dirty\n", encoding="utf-8")
+    monkeypatch.setenv("GIT_WORK_TREE", str(redirected))
+    monkeypatch.setitem(updates._CHANNEL_SOURCE_URLS, "kaladin", remote.as_uri())
+    monkeypatch.setattr(updates, "REPO_ROOT", checkout)
+    monkeypatch.setattr(updates, "_schedule_restart", MagicMock())
+    monkeypatch.setattr(
+        updates,
+        "_restart_blocker_snapshot",
+        lambda: {"restart_blocked": False, "active_streams": 0, "active_runs": 0},
+    )
+
+    result = updates.apply_force_update("webui", channel="kaladin")
+
+    assert result["ok"] is True, result
+    assert (checkout / "release.txt").read_text(encoding="utf-8") == "v2\n"
+    assert (redirected / "release.txt").read_text(encoding="utf-8") == "redirected\n"
+    head, ok = updates._run_trusted_git(["rev-parse", "HEAD"], checkout)
+    assert ok and head == second
+
+
+def test_kaladin_apply_overrides_local_core_worktree_for_status_stash_and_merge(tmp_path, monkeypatch):
+    remote, _source, checkout, _first, second = _repo_with_kaladin_history(tmp_path)
+    redirected = tmp_path / "redirected"
+    redirected.mkdir()
+    (redirected / "release.txt").write_text("redirected\n", encoding="utf-8")
+    (checkout / "stable.txt").write_text("local change\n", encoding="utf-8")
+    _git(checkout, "config", "core.worktree", str(redirected))
+    monkeypatch.setitem(updates._CHANNEL_SOURCE_URLS, "kaladin", remote.as_uri())
+    monkeypatch.setattr(updates, "REPO_ROOT", checkout)
+    monkeypatch.setattr(updates, "_schedule_restart", MagicMock())
+
+    result = updates._apply_update_inner("webui", "kaladin")
+
+    assert result["ok"] is True, result
+    assert (checkout / "release.txt").read_text(encoding="utf-8") == "v2\n"
+    assert (checkout / "stable.txt").read_text(encoding="utf-8") == "local change\n"
+    assert (redirected / "release.txt").read_text(encoding="utf-8") == "redirected\n"
+    head, ok = updates._run_trusted_git(["rev-parse", "HEAD"], checkout)
+    assert ok and head == second
+
+
+def test_kaladin_apply_disables_repository_hooks_while_updating_intended_worktree(tmp_path, monkeypatch):
+    remote, _source, checkout, _first, second = _repo_with_kaladin_history(tmp_path)
+    hook_marker = tmp_path / "hook-ran"
+    hooks_dir = tmp_path / "configured-hooks"
+    hooks_dir.mkdir()
+    hook = hooks_dir / "post-merge"
+    hook.write_text(f"#!/bin/sh\nprintf ran > {hook_marker}\n", encoding="utf-8")
+    hook.chmod(0o755)
+    _git(checkout, "config", "core.hooksPath", str(hooks_dir))
+    monkeypatch.setitem(updates._CHANNEL_SOURCE_URLS, "kaladin", remote.as_uri())
+    monkeypatch.setattr(updates, "REPO_ROOT", checkout)
+    monkeypatch.setattr(updates, "_schedule_restart", MagicMock())
+
+    result = updates._apply_update_inner("webui", "kaladin")
+
+    assert result["ok"] is True, result
+    assert (checkout / "release.txt").read_text(encoding="utf-8") == "v2\n"
+    assert not hook_marker.exists()
+    head, ok = updates._run_trusted_git(["rev-parse", "HEAD"], checkout)
+    assert ok and head == second
+
+
 def test_kaladin_apply_uses_pinned_oid_when_refs_move_after_selection(tmp_path, monkeypatch):
     remote, _source, checkout, first, second = _repo_with_kaladin_history(tmp_path)
     monkeypatch.setitem(updates._CHANNEL_SOURCE_URLS, "kaladin", remote.as_uri())
     monkeypatch.setattr(updates, "REPO_ROOT", checkout)
     monkeypatch.setattr(updates, "_schedule_restart", MagicMock())
-    real_run_git = updates._run_git
+    real_run_git = updates._run_kaladin_git
     merge_args = []
 
     def racing_git(args, cwd, timeout=10):
@@ -329,7 +402,7 @@ def test_kaladin_apply_uses_pinned_oid_when_refs_move_after_selection(tmp_path, 
             )
         return real_run_git(args, cwd, timeout=timeout)
 
-    monkeypatch.setattr(updates, "_run_git", racing_git)
+    monkeypatch.setattr(updates, "_run_kaladin_git", racing_git)
     result = updates._apply_update_inner("webui", "kaladin")
 
     assert result["ok"] is True
@@ -347,7 +420,7 @@ def test_kaladin_force_reset_uses_pinned_oid_when_refs_move_after_selection(tmp_
         "_restart_blocker_snapshot",
         lambda: {"restart_blocked": False, "active_streams": 0, "active_runs": 0},
     )
-    real_run_git = updates._run_git
+    real_run_git = updates._run_kaladin_git
     reset_args = []
 
     def racing_git(args, cwd, timeout=10):
@@ -366,7 +439,7 @@ def test_kaladin_force_reset_uses_pinned_oid_when_refs_move_after_selection(tmp_
             )
         return real_run_git(args, cwd, timeout=timeout)
 
-    monkeypatch.setattr(updates, "_run_git", racing_git)
+    monkeypatch.setattr(updates, "_run_kaladin_git", racing_git)
     result = updates.apply_force_update("webui", channel="kaladin")
 
     assert result["ok"] is True
@@ -377,7 +450,7 @@ def test_kaladin_force_reset_uses_pinned_oid_when_refs_move_after_selection(tmp_
 def test_concurrent_authoritative_namespace_change_fails_fetch_closed(tmp_path, monkeypatch):
     remote, _source, checkout, first, _second = _repo_with_kaladin_history(tmp_path)
     monkeypatch.setitem(updates._CHANNEL_SOURCE_URLS, "kaladin", remote.as_uri())
-    real_run_git_input = updates._run_trusted_git_input
+    real_run_git_input = updates._run_kaladin_git_input
 
     def racing_update_ref(args, cwd, stdin_text, timeout=10):
         subprocess.run(
@@ -387,7 +460,7 @@ def test_concurrent_authoritative_namespace_change_fails_fetch_closed(tmp_path, 
         )
         return real_run_git_input(args, cwd, stdin_text, timeout=timeout)
 
-    monkeypatch.setattr(updates, "_run_trusted_git_input", racing_update_ref)
+    monkeypatch.setattr(updates, "_run_kaladin_git_input", racing_update_ref)
     out, ok = updates._fetch_channel_tags(checkout, "kaladin")
 
     assert not ok
