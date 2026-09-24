@@ -2912,6 +2912,7 @@ def _get_cached_session_list_payload(
         )
     return payload
 
+from api.runtime_identity import WEBUI_REVISION
 from api.config import (
     STATE_DIR,
     SESSION_DIR,
@@ -12759,6 +12760,8 @@ def _handle_health(handler, parsed):
         "uptime_seconds": round(time.time() - SERVER_START_TIME, 1),
         "accept_loop": _accept_loop_health(handler),
     }
+    if WEBUI_REVISION is not None:
+        payload["webui_revision"] = WEBUI_REVISION
     if "oldest_run_age_seconds" in run_check:
         payload["oldest_run_age_seconds"] = run_check["oldest_run_age_seconds"]
     if "idle_seconds_since_last_run" in run_check:
