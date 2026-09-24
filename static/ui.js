@@ -10376,7 +10376,7 @@ async function refreshSession() {
 // ── Update banner ──
 function _formatUpdateTargetStatus(label,info){
   const manualNoGit=!!(info&&info.no_git&&info.manual_update&&info.behind>0);
-  if(!info||(info.no_git&&!manualNoGit)||!(info.behind>0)) return null;
+  if(!info||info.error||info.stale_check||(info.no_git&&!manualNoGit)||!(info.behind>0)) return null;
   const release=(info.release_based&&info.latest_version)
     ?` (${info.current_version||'unknown'} -> ${info.latest_version})`
     :(info.branch?` (${info.branch})`:'');
@@ -10422,7 +10422,7 @@ function _updateWhatsNewTargets(data){
     label:target.label,
     info:target.info,
     url:_updateCompareUrl(target.info),
-  })).filter((target)=>target.info&&target.info.behind>0&&target.url);
+  })).filter((target)=>target.info&&!target.info.error&&!target.info.stale_check&&target.info.behind>0&&target.url);
 }
 function _appendUpdateDiffLinks(container,targets,prefix){
   if(!container) return;
@@ -10696,8 +10696,8 @@ function _showUpdateBanner(data){
   const btnApply=$('btnApplyUpdate');
   if(btnApply){
     const webuiManual=!!(data&&data.webui&&data.webui.manual_update&&data.webui.behind>0);
-    const webuiUpdatable=!!(data&&data.webui&&data.webui.behind>0&&!webuiManual);
-    const agentUpdatable=!!(data&&data.agent&&data.agent.behind>0);
+    const webuiUpdatable=!!(data&&data.webui&&!data.webui.error&&!data.webui.stale_check&&data.webui.behind>0&&!webuiManual);
+    const agentUpdatable=!!(data&&data.agent&&!data.agent.error&&!data.agent.stale_check&&data.agent.behind>0);
     const hasApplyTargets=webuiUpdatable||agentUpdatable;
     btnApply.disabled=!hasApplyTargets;
     btnApply.style.display=hasApplyTargets?'':'none';
@@ -10768,8 +10768,8 @@ async function applyUpdates(){
   const forceBtnReset=$('btnForceUpdate');
   if(forceBtnReset){forceBtnReset.style.display='none';forceBtnReset.dataset.target='';}
   const targets=[];
-  if(window._updateData?.agent?.behind>0) targets.push('agent');
-  if(window._updateData?.webui?.behind>0&&!window._updateData?.webui?.manual_update) targets.push('webui');
+  if(window._updateData?.agent?.behind>0&&!window._updateData?.agent?.error&&!window._updateData?.agent?.stale_check) targets.push('agent');
+  if(window._updateData?.webui?.behind>0&&!window._updateData?.webui?.error&&!window._updateData?.webui?.stale_check&&!window._updateData?.webui?.manual_update) targets.push('webui');
   if(!targets.length){
     const msg=updateText('update_no_target','No update target selected. Refresh update status and retry.');
     if(errEl){errEl.textContent=msg;errEl.style.display='block';}
