@@ -16,6 +16,7 @@ import re
 import shutil
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 import urllib.error
@@ -717,6 +718,7 @@ _CHANNEL_TAG_GLOBS = {
 _CHANNEL_SOURCE_URLS = {
     'kaladin': 'https://github.com/snoyberg/hermes-webui.git',
 }
+_KALADIN_REF_PREFIX = 'refs/hermes-webui/kaladin/tags/'
 
 
 def _normalize_channel(channel) -> str:
@@ -754,7 +756,161 @@ def _channel_fetch_args(channel, *, quiet: bool = True) -> list[str]:
     return args
 
 
+def _trusted_git_env() -> dict[str, str]:
+    """Return an environment that cannot redirect the fixed Kaladin source."""
+    env = os.environ.copy()
+    scrubbed = {
+        'GIT_ASKPASS', 'SSH_ASKPASS', 'GIT_DIR', 'GIT_WORK_TREE', 'GIT_CONFIG',
+        'GIT_CONFIG_GLOBAL', 'GIT_CONFIG_SYSTEM', 'GIT_CONFIG_NOSYSTEM',
+        'GIT_CONFIG_COUNT', 'GIT_CONFIG_PARAMETERS', 'GIT_SSH',
+        'GIT_SSH_COMMAND', 'GIT_SSH_VARIANT', 'GIT_PROXY_COMMAND',
+    }
+    for key in list(env):
+        if key in scrubbed or key.startswith('GIT_CONFIG_KEY_') or key.startswith('GIT_CONFIG_VALUE_'):
+            env.pop(key, None)
+    env['GIT_CONFIG_GLOBAL'] = os.devnull
+    env['GIT_CONFIG_NOSYSTEM'] = '1'
+    env['GIT_TERMINAL_PROMPT'] = '0'
+    return env
+
+
+def _run_trusted_git(args, cwd, *, timeout=15):
+    """Run Git in a clean repository/config boundary for a trusted-source fetch."""
+    git_executable = _resolve_git_executable()
+    if not git_executable:
+        return 'git executable not found', False
+    command = [
+        git_executable,
+        '-c', 'core.askPass=',
+        '-c', 'credential.helper=',
+        '-c', 'protocol.ext.allow=never',
+        *args,
+    ]
+    try:
+        result = subprocess.run(
+            command,
+            cwd=str(cwd),
+            env=_trusted_git_env(),
+            stdin=subprocess.DEVNULL,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            encoding='utf-8',
+            errors='replace',
+            creationflags=windows_hide_flags(),
+        )
+    except subprocess.TimeoutExpired:
+        return f"git {args[0]} timed out after {timeout}s", False
+    except OSError as exc:
+        return f'git failed to start: {exc}', False
+    stdout = (result.stdout or '').strip()
+    stderr = (result.stderr or '').strip()
+    if result.returncode == 0:
+        return stdout, True
+    return stderr or stdout or f'git exited with status {result.returncode}', False
+
+
+def _run_git_input(args, cwd, stdin_text, *, timeout=10):
+    """Run a local Git command with transactional stdin."""
+    git_executable = _resolve_git_executable()
+    if not git_executable:
+        return 'git executable not found', False
+    try:
+        result = subprocess.run(
+            [git_executable, *args], cwd=str(cwd), input=stdin_text,
+            capture_output=True, text=True, timeout=timeout,
+            encoding='utf-8', errors='replace',
+            creationflags=windows_hide_flags(),
+        )
+    except (subprocess.TimeoutExpired, OSError) as exc:
+        return f'git failed: {exc}', False
+    stdout = (result.stdout or '').strip()
+    stderr = (result.stderr or '').strip()
+    return (stdout, True) if result.returncode == 0 else (
+        stderr or stdout or f'git exited with status {result.returncode}', False
+    )
+
+
+def _kaladin_release_refs(path) -> list[tuple[str, str]]:
+    """Return authoritative Kaladin tag names and pinned commit IDs."""
+    out, ok = _run_git([
+        'for-each-ref', '--format=%(refname:strip=4) %(objectname)',
+        _KALADIN_REF_PREFIX,
+    ], path)
+    if not (ok and out):
+        return []
+    refs = []
+    for line in out.splitlines():
+        name, separator, oid = line.strip().partition(' ')
+        if separator and name.startswith('kaladin-v') and re.fullmatch(r'[0-9a-fA-F]{40,64}', oid):
+            refs.append((name, oid.lower()))
+    return sorted(refs, key=lambda item: _release_tag_sort_key(item[0]), reverse=True)
+
+
+def _fetch_kaladin_tags(path, *, quiet=True, timeout=15):
+    """Fetch trusted tags in isolation and atomically publish their pinned IDs."""
+    source = _channel_source_url('kaladin')
+    try:
+        with tempfile.TemporaryDirectory(prefix='hermes-kaladin-fetch-') as temp_dir:
+            bare = Path(temp_dir) / 'source.git'
+            bundle = Path(temp_dir) / 'source.bundle'
+            out, ok = _run_trusted_git(['init', '--bare', '--quiet', str(bare)], temp_dir, timeout=timeout)
+            if not ok:
+                return out, False
+            fetch_args = ['fetch', source]
+            if quiet:
+                fetch_args.append('--quiet')
+            fetch_args.append(f"refs/tags/{_channel_tag_glob('kaladin')}:refs/tags/{_channel_tag_glob('kaladin')}")
+            out, ok = _run_trusted_git(fetch_args, bare, timeout=timeout)
+            if not ok:
+                return out, False
+
+            names_out, ok = _run_trusted_git([
+                'for-each-ref', '--format=%(refname)', 'refs/tags/kaladin-v*'
+            ], bare, timeout=timeout)
+            if not ok:
+                return names_out, False
+            full_refs = [line.strip() for line in names_out.splitlines() if line.strip()]
+            fetched = {}
+            for full_ref in full_refs:
+                name = full_ref.removeprefix('refs/tags/')
+                oid, resolved = _run_trusted_git(['rev-parse', f'{full_ref}^{{commit}}'], bare, timeout=timeout)
+                if not resolved or not re.fullmatch(r'[0-9a-fA-F]{40,64}', oid or ''):
+                    return f'Could not resolve trusted Kaladin tag {name} to a commit.', False
+                fetched[name] = oid.lower()
+
+            if full_refs:
+                out, ok = _run_trusted_git(['bundle', 'create', str(bundle), *full_refs], bare, timeout=timeout)
+                if not ok:
+                    return out, False
+                out, ok = _run_git(['bundle', 'unbundle', str(bundle)], path, timeout=timeout)
+                if not ok:
+                    return out, False
+
+            current = dict(_kaladin_release_refs(path))
+            moved = sorted(name for name, oid in fetched.items() if name in current and current[name] != oid)
+            if moved:
+                return 'Trusted Kaladin release tag moved: ' + ', '.join(moved), False
+
+            zero = '0' * 40
+            transaction = ['start']
+            for name, oid in sorted(fetched.items()):
+                transaction.append(f'update {_KALADIN_REF_PREFIX}{name} {oid} {current.get(name, zero)}')
+            for name, oid in sorted(current.items()):
+                if name not in fetched:
+                    transaction.append(f'delete {_KALADIN_REF_PREFIX}{name} {oid}')
+            transaction.extend(['prepare', 'commit', ''])
+            out, ok = _run_git_input(['update-ref', '--stdin'], path, '\n'.join(transaction), timeout=timeout)
+            if not ok:
+                return 'Trusted Kaladin ref namespace changed concurrently: ' + out, False
+            return '', True
+    except OSError as exc:
+        return f'Trusted Kaladin fetch staging failed: {exc}', False
+
+
 def _fetch_channel_tags(path, channel, *, quiet: bool = True, timeout: int = 15):
+    if _normalize_channel(channel) == 'kaladin':
+        return _fetch_kaladin_tags(path, quiet=quiet, timeout=timeout)
     return _run_git(_channel_fetch_args(channel, quiet=quiet), path, timeout=timeout)
 
 
@@ -999,6 +1155,88 @@ def _can_fast_forward_to(path, ref):
     return bool(ok)
 
 
+def _kaladin_target_state(path) -> dict:
+    """Resolve the latest trusted Kaladin release once, to an immutable commit ID."""
+    refs = _kaladin_release_refs(path)
+    if not refs:
+        return {'status': 'absent', 'refs': []}
+    latest_name, latest_oid = refs[0]
+    head_oid, head_ok = _run_git(['rev-parse', 'HEAD^{commit}'], path)
+    if not (head_ok and re.fullmatch(r'[0-9a-fA-F]{40,64}', head_oid or '')):
+        return {'status': 'unverifiable', 'refs': refs}
+    head_oid = head_oid.lower()
+    if _head_contains_ref(path, latest_oid):
+        status = 'current'
+    elif _can_fast_forward_to(path, latest_oid):
+        status = 'update'
+    else:
+        status = 'divergent'
+    current_name = None
+    current_oid = head_oid
+    for name, oid in refs:
+        if _head_contains_ref(path, oid):
+            current_name, current_oid = name, oid
+            break
+    return {
+        'status': status,
+        'refs': refs,
+        'latest_name': latest_name,
+        'latest_oid': latest_oid,
+        'current_name': current_name,
+        'current_oid': current_oid,
+        'head_oid': head_oid,
+    }
+
+
+def _check_kaladin_release(path, name):
+    state = _kaladin_target_state(path)
+    source_url = _normalize_remote_url(_channel_source_url('kaladin'))
+    if state['status'] == 'absent':
+        return None
+    if state['status'] == 'unverifiable':
+        return {
+            'name': name, 'behind': None, 'channel': 'kaladin',
+            'error': 'Could not resolve the installed WebUI commit.',
+        }
+    latest_name = state['latest_name']
+    latest_oid = state['latest_oid']
+    current_name = state['current_name']
+    current_oid = state['current_oid']
+    if state['status'] == 'current':
+        return {
+            'name': name, 'behind': 0,
+            'current_sha': current_oid, 'latest_sha': latest_oid,
+            'branch': latest_oid, 'repo_url': source_url,
+            'release_based': True,
+            'current_version': current_name or WEBUI_VERSION,
+            'latest_version': latest_name, 'channel': 'kaladin',
+        }
+    if state['status'] == 'divergent':
+        return {
+            'name': name, 'behind': None,
+            'current_sha': current_oid, 'latest_sha': latest_oid,
+            'branch': latest_oid, 'repo_url': source_url,
+            'release_based': True,
+            'current_version': current_name or WEBUI_VERSION,
+            'latest_version': latest_name, 'channel': 'kaladin',
+            'error': 'Latest Kaladin release is not fast-forwardable from HEAD.',
+            'compare_url': _build_compare_url(source_url, current_oid, latest_oid),
+        }
+    tag_names = [tag_name for tag_name, _oid in state['refs']]
+    behind = tag_names.index(current_name) if current_name in tag_names else sum(
+        1 for _tag_name, oid in state['refs'] if _can_fast_forward_to(path, oid)
+    )
+    return {
+        'name': name, 'behind': max(1, behind),
+        'current_sha': current_oid, 'latest_sha': latest_oid,
+        'branch': latest_oid, 'repo_url': source_url,
+        'release_based': True,
+        'current_version': current_name or WEBUI_VERSION,
+        'latest_version': latest_name, 'channel': 'kaladin',
+        'compare_url': _build_compare_url(source_url, current_oid, latest_oid),
+    }
+
+
 def _select_apply_compare_ref(path, channel=DEFAULT_UPDATE_CHANNEL, target=None):
     """Return the same remote ref family that the update check reports.
 
@@ -1026,6 +1264,9 @@ def _select_apply_compare_ref(path, channel=DEFAULT_UPDATE_CHANNEL, target=None)
     unchanged. This mirrors ``_check_repo_release``.
     """
     channel = _normalize_channel(channel)
+    if channel == 'kaladin' and target == 'webui':
+        state = _kaladin_target_state(path)
+        return state.get('latest_oid') if state.get('status') == 'update' else None
     suppress_stable_fallthrough = (channel == 'stable' and target == 'webui')
     fixed_tag_only = channel == 'kaladin' and target == 'webui'
     tags = _release_tags(path, channel)
@@ -1098,6 +1339,8 @@ def _channel_up_to_date_info(path, name, channel, current_tag):
 def _check_repo_release(path, name, channel=DEFAULT_UPDATE_CHANNEL):
     """Check if a git repo is behind its latest published channel release tag."""
     channel = _normalize_channel(channel)
+    if channel == 'kaladin' and name == 'webui':
+        return _check_kaladin_release(path, name)
     tags = _release_tags(path, channel)
     if not tags:
         return None
@@ -1337,10 +1580,19 @@ def _check_repo(path, name, channel=DEFAULT_UPDATE_CHANNEL):
         path, channel, quiet=(channel == 'kaladin'), timeout=15
     )
     if not fetch_ok:
-        release_info = _check_repo_release(path, name, channel)
         message = 'fetch failed'
         if fetch_out:
             message = f'{message}: {_sanitize_git_diagnostic(fetch_out)}'
+        if name == 'webui' and channel == 'kaladin':
+            return {
+                'name': name,
+                'behind': None,
+                'error': message,
+                'stale_check': True,
+                'channel': channel,
+                'dirty': _is_dirty(path),
+            }
+        release_info = _check_repo_release(path, name, channel)
         if release_info is not None:
             release_info = dict(release_info)
             release_info['error'] = message
@@ -2004,14 +2256,41 @@ def _discard_local_changes(path: Path, reset_ref: str) -> bool:
     return ok
 
 
-def _kaladin_tags_containing_head(path: Path) -> list[str]:
-    """Return Kaladin release tags whose history contains the current HEAD."""
-    out, ok = _run_git(
-        ['tag', '--list', _channel_tag_glob('kaladin'), '--contains', 'HEAD'], path
-    )
-    if not (ok and out):
-        return []
-    return [line.strip() for line in out.splitlines() if line.strip()]
+def _kaladin_tags_containing_head(path: Path, refs=None) -> list[str]:
+    """Return trusted Kaladin tags whose commits are ancestors of current HEAD."""
+    trusted_refs = _kaladin_release_refs(path) if refs is None else refs
+    return [
+        name for name, oid in trusted_refs
+        if _head_contains_ref(path, oid)
+    ]
+
+
+def _kaladin_apply_failure(path: Path, state: dict) -> dict | None:
+    """Return a fail-closed apply response, or None for current/update states."""
+    containing_tags = []
+    if state.get('status') == 'absent':
+        message = 'No trusted Kaladin release tag is available.'
+    elif state.get('status') == 'unverifiable':
+        message = 'Could not verify the installed WebUI commit.'
+    elif state.get('status') == 'divergent':
+        containing_tags = _kaladin_tags_containing_head(path, state.get('refs', []))
+        if containing_tags:
+            message = (
+                'Refusing to abandon a checkout preserved by trusted Kaladin tag(s) '
+                + ', '.join(containing_tags) + '.'
+            )
+        else:
+            message = 'Latest Kaladin release is not fast-forwardable from HEAD.'
+    else:
+        return None
+    return {
+        'ok': False,
+        'message': message,
+        'target': 'webui',
+        'channel': 'kaladin',
+        'diverged': state.get('status') == 'divergent',
+        'refused_kaladin_checkout': bool(containing_tags),
+    }
 
 
 def apply_force_update(target: str, channel=None) -> dict:
@@ -2076,7 +2355,16 @@ def apply_force_update(target: str, channel=None) -> dict:
                 ),
             }
 
-        compare_ref = _select_apply_compare_ref(path, channel, target)
+        kaladin_state = None
+        if target == 'webui' and channel == 'kaladin':
+            kaladin_state = _kaladin_target_state(path)
+            kaladin_failure = _kaladin_apply_failure(path, kaladin_state)
+            if kaladin_failure is not None:
+                return kaladin_failure
+
+        compare_ref = (
+            kaladin_state.get('latest_oid') if kaladin_state.get('status') == 'update' else None
+        ) if kaladin_state is not None else _select_apply_compare_ref(path, channel, target)
         # Stable channel, already up to date on the promoted subset: nothing to
         # force to. Do NOT fall back to origin/master (firehose). See
         # _select_apply_compare_ref channel semantics.
@@ -2254,7 +2542,16 @@ def _apply_update_inner(target, channel=DEFAULT_UPDATE_CHANNEL):
             ),
         }
 
-    compare_ref = _select_apply_compare_ref(path, channel, target)
+    kaladin_state = None
+    if target == 'webui' and channel == 'kaladin':
+        kaladin_state = _kaladin_target_state(path)
+        kaladin_failure = _kaladin_apply_failure(path, kaladin_state)
+        if kaladin_failure is not None:
+            return kaladin_failure
+
+    compare_ref = (
+        kaladin_state.get('latest_oid') if kaladin_state.get('status') == 'update' else None
+    ) if kaladin_state is not None else _select_apply_compare_ref(path, channel, target)
     # On the stable channel a None ref means HEAD already contains the latest
     # promoted stable tag (up-to-date on the promoted subset). Do NOT fall back
     # to origin/master — that would advance the user onto the experimental
