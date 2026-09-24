@@ -26,9 +26,14 @@ tag, unverifiable commit, or non-fast-forward tag fails closed; stale local data
 is not returned to the UI as an available update. Compare links use the trusted
 source repository rather than the checkout's `origin`.
 
-Normal Kaladin apply uses `git merge --ff-only <selected-object-id>` after the
-isolated fetch, then follows the updater's existing drain, restart, and reconnect
-flow. The destructive force-update path uses the same pinned object ID. It may
+Normal Kaladin apply uses a channel-specific hardened Git runner for every graph,
+status, stash, merge, checkout, clean, and reset operation. The runner scrubs
+inherited `GIT_*` process overrides, explicitly binds both the checkout's resolved
+Git directory and intended work tree, overrides `core.worktree`, and disables
+repository-configured hooks and filesystem monitors. It then runs
+`git merge --ff-only <selected-object-id>` after the isolated fetch and follows
+the updater's existing drain, restart, and reconnect flow. The destructive
+force-update path uses the same pinned object ID and hardened runner. It may
 replace ordinary divergent untagged commits, but refuses a reset that would make
 an authoritative Kaladin tag currently reachable from `HEAD` unreachable from
 the selected target.
