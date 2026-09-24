@@ -28,6 +28,10 @@ contributor guidance; it does not change runtime behavior or CI gates.
   matching, overflow promotion, routed fallback, and selected-row rendering.
   Start here before changing model-picker deduplication, restoration, or live
   catalog merging.
+- [`docs/architecture/update-channels.md`](architecture/update-channels.md):
+  WebUI update-channel tag families, source trust, fetch/apply behavior, and
+  fail-closed Kaladin invariants.
+
 - [`docs/remote-workspaces.md`](remote-workspaces.md):
   architecture contract for remote terminal workspaces (SSH/Docker), target-side
   POSIX path preservation against macOS synthetic firmlink expansion, and
