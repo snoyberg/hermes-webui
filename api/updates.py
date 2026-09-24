@@ -701,6 +701,8 @@ def _detect_default_branch(path):
 #                                v0.51.N tag matches, so legacy installs and the
 #                                full existing test suite keep working unchanged.
 #   experimental -> 'exp-v*'    every release batch, tagged for testers who opt in.
+#   kaladin      -> 'kaladin-v*' releases fetched only from the trusted Kaladin
+#                                  fork; this channel never follows a branch.
 #
 # ``exp-v*`` deliberately does NOT match ``v*`` (exp tags start with 'e', not
 # 'v'): the two channels never leak into each other's tag list, and a legacy
@@ -710,6 +712,10 @@ DEFAULT_UPDATE_CHANNEL = 'stable'
 _CHANNEL_TAG_GLOBS = {
     'stable': 'v*',
     'experimental': 'exp-v*',
+    'kaladin': 'kaladin-v*',
+}
+_CHANNEL_SOURCE_URLS = {
+    'kaladin': 'https://github.com/snoyberg/hermes-webui.git',
 }
 
 
@@ -723,6 +729,33 @@ def _normalize_channel(channel) -> str:
 def _channel_tag_glob(channel) -> str:
     """Return the ``git tag --list`` glob for the given channel."""
     return _CHANNEL_TAG_GLOBS[_normalize_channel(channel)]
+
+
+def _channel_source_url(channel) -> str | None:
+    """Return a fixed source URL when a channel must not trust ``origin``."""
+    return _CHANNEL_SOURCE_URLS.get(_normalize_channel(channel))
+
+
+def _channel_fetch_args(channel, *, quiet: bool = True) -> list[str]:
+    """Build the channel's exact tag-fetch command."""
+    channel = _normalize_channel(channel)
+    source = _channel_source_url(channel)
+    if source:
+        args = ['fetch', source]
+        if quiet:
+            args.append('--quiet')
+        glob = _channel_tag_glob(channel)
+        args.append(f'refs/tags/{glob}:refs/tags/{glob}')
+        return args
+    args = ['fetch', 'origin']
+    if quiet:
+        args.append('--quiet')
+    args.extend(['--tags', '--force'])
+    return args
+
+
+def _fetch_channel_tags(path, channel, *, quiet: bool = True, timeout: int = 15):
+    return _run_git(_channel_fetch_args(channel, quiet=quiet), path, timeout=timeout)
 
 
 def _read_update_channel() -> str:
@@ -994,6 +1027,7 @@ def _select_apply_compare_ref(path, channel=DEFAULT_UPDATE_CHANNEL, target=None)
     """
     channel = _normalize_channel(channel)
     suppress_stable_fallthrough = (channel == 'stable' and target == 'webui')
+    fixed_tag_only = channel == 'kaladin' and target == 'webui'
     tags = _release_tags(path, channel)
     if tags:
         latest_tag = tags[0]
@@ -1015,12 +1049,15 @@ def _select_apply_compare_ref(path, channel=DEFAULT_UPDATE_CHANNEL, target=None)
             # WebUI stable: "HEAD past/contains the latest stable tag" means
             # up-to-date on the promoted subset — NOT a signal to advance to
             # master. Return None so the caller reports no update.
-            if suppress_stable_fallthrough:
+            if suppress_stable_fallthrough or fixed_tag_only:
                 return None
             # Experimental / agent: preserve the historical branch fallthrough.
             pass
         else:
             return latest_tag
+
+    if fixed_tag_only:
+        return None
 
     upstream, ok = _run_git(['rev-parse', '--abbrev-ref', '@{upstream}'], path)
     if ok and upstream:
@@ -1038,8 +1075,12 @@ def _channel_up_to_date_info(path, name, channel, current_tag):
     (behind == 0) rather than falling through to the branch comparison, which
     would advance the user onto the experimental firehose.
     """
-    remote_url, _ = _run_git(['remote', 'get-url', 'origin'], path)
-    remote_url = _normalize_remote_url(remote_url)
+    source_url = _channel_source_url(channel) if name == 'webui' else None
+    if source_url:
+        remote_url = _normalize_remote_url(source_url)
+    else:
+        remote_url, _ = _run_git(['remote', 'get-url', 'origin'], path)
+        remote_url = _normalize_remote_url(remote_url)
     return {
         'name': name,
         'behind': 0,
@@ -1114,8 +1155,9 @@ def _check_repo_release(path, name, channel=DEFAULT_UPDATE_CHANNEL):
     # origin/master (the firehose). Report up-to-date. The AGENT repo and the
     # experimental channel keep the historical fall-through.
     suppress_stable_fallthrough = (channel == 'stable' and name == 'webui')
+    fixed_tag_only = channel == 'kaladin' and name == 'webui'
     if behind == 0 and _head_is_past_latest_tag(path, current_tag, channel):
-        if suppress_stable_fallthrough:
+        if suppress_stable_fallthrough or fixed_tag_only:
             return _channel_up_to_date_info(path, name, channel, current_tag)
         return None
 
@@ -1125,7 +1167,7 @@ def _check_repo_release(path, name, channel=DEFAULT_UPDATE_CHANNEL):
     # Fall through to the branch check so the banner compares against the
     # configured upstream instead of advertising a tag that cannot fast-forward.
     if behind > 0 and _head_contains_ref(path, latest_tag):
-        if suppress_stable_fallthrough:
+        if suppress_stable_fallthrough or fixed_tag_only:
             return _channel_up_to_date_info(path, name, channel, current_tag)
         return None
 
@@ -1133,23 +1175,40 @@ def _check_repo_release(path, name, channel=DEFAULT_UPDATE_CHANNEL):
     # main past an older tag. A positive tag-name gap then advertises an update
     # that `git pull --ff-only <latest-tag>` cannot reach.
     if behind > 0 and not _can_fast_forward_to(path, latest_tag):
+        if fixed_tag_only:
+            source_url = _normalize_remote_url(_channel_source_url(channel))
+            return {
+                'name': name,
+                'behind': None,
+                'current_sha': current_sha_ref,
+                'latest_sha': latest_tag,
+                'branch': latest_tag,
+                'repo_url': source_url,
+                'release_based': True,
+                'current_version': current_version_display,
+                'latest_version': latest_tag,
+                'channel': channel,
+                'error': 'Latest Kaladin release tag is not fast-forwardable from HEAD.',
+                'compare_url': _build_compare_url(
+                    source_url, current_sha_ref, latest_tag
+                ),
+            }
         if suppress_stable_fallthrough:
             return _channel_up_to_date_info(path, name, channel, current_tag)
         return None
 
-    remote_url, _ = _run_git(['remote', 'get-url', 'origin'], path)
-    remote_url = _normalize_remote_url(remote_url)
+    source_url = _channel_source_url(channel) if name == 'webui' else None
+    if source_url:
+        remote_url = _normalize_remote_url(source_url)
+    else:
+        remote_url, _ = _run_git(['remote', 'get-url', 'origin'], path)
+        remote_url = _normalize_remote_url(remote_url)
 
-    return {
+    result = {
         'name': name,
         'behind': behind,
-        # GitHub compare URLs accept tag names, and tag-to-tag links are the
-        # clearest "what changed in this release?" view for operators. Use a
-        # git-VERIFIED ref for the compare link: the resolved channel tag when
-        # one is reachable behind HEAD, else None. WEBUI_VERSION is NOT safe here
-        # — it can be `v0.52.0-dirty-<hash>`, `v0.52.0-N-g<sha>`, a bare SHA, or
-        # `unknown`, none of which are guaranteed refs, so reusing it would emit
-        # a broken /compare link (ui.js) and lose update-summary commit subjects. (#5864)
+        # Use a git-verified ref for the installed side of a comparison. The
+        # display version is not safe here: it can be dirty, ahead, or a bare SHA.
         'current_sha': current_sha_ref,
         'latest_sha': latest_tag,
         'branch': latest_tag,
@@ -1159,6 +1218,11 @@ def _check_repo_release(path, name, channel=DEFAULT_UPDATE_CHANNEL):
         'latest_version': latest_tag,
         'channel': channel,
     }
+    if source_url:
+        result['compare_url'] = _build_compare_url(
+            remote_url, current_sha_ref, latest_tag
+        )
+    return result
 
 
 def _check_repo_branch(path, name, *, fetch=True):
@@ -1267,8 +1331,11 @@ def _check_repo(path, name, channel=DEFAULT_UPDATE_CHANNEL):
     # says a release tag points to. Without --force, a remote re-tag (e.g.
     # after a squash-merge that re-points a release tag at a new SHA) jams
     # the update path indefinitely with "would clobber existing tag" errors.
-    # See #2756.
-    fetch_out, fetch_ok = _run_git(['fetch', 'origin', '--tags', '--force'], path, timeout=15)
+    # See #2756. Kaladin alone uses its narrow quiet fixed-source fetch;
+    # existing Stable/Experimental command shapes remain unchanged.
+    fetch_out, fetch_ok = _fetch_channel_tags(
+        path, channel, quiet=(channel == 'kaladin'), timeout=15
+    )
     if not fetch_ok:
         release_info = _check_repo_release(path, name, channel)
         message = 'fetch failed'
@@ -1293,6 +1360,15 @@ def _check_repo(path, name, channel=DEFAULT_UPDATE_CHANNEL):
         release_info = dict(release_info)
         release_info['dirty'] = _is_dirty(path)
         return release_info
+
+    if name == 'webui' and channel == 'kaladin':
+        return {
+            'name': name,
+            'behind': None,
+            'error': 'No fast-forwardable Kaladin release tag is available.',
+            'channel': channel,
+            'dirty': _is_dirty(path),
+        }
 
     branch_info = _check_repo_branch(path, name, fetch=False)
     if branch_info is not None:
@@ -1928,6 +2004,16 @@ def _discard_local_changes(path: Path, reset_ref: str) -> bool:
     return ok
 
 
+def _kaladin_tags_containing_head(path: Path) -> list[str]:
+    """Return Kaladin release tags whose history contains the current HEAD."""
+    out, ok = _run_git(
+        ['tag', '--list', _channel_tag_glob('kaladin'), '--contains', 'HEAD'], path
+    )
+    if not (ok and out):
+        return []
+    return [line.strip() for line in out.splitlines() if line.strip()]
+
+
 def apply_force_update(target: str, channel=None) -> dict:
     """Discard local changes for the requested update target.
 
@@ -1977,10 +2063,10 @@ def apply_force_update(target: str, channel=None) -> dict:
         # /api/updates/clear_lock endpoint, where the user has opted in to
         # a non-destructive retry.
 
-        # --force so a remote re-tag (e.g. squash-merge that re-points an
-        # existing release tag) doesn't jam the apply path with "would clobber
-        # existing tag". See #2756.
-        fetch_out, fetch_ok = _run_git(['fetch', 'origin', '--quiet', '--tags', '--force'], path, timeout=15)
+        # Existing channels retain their force-fetch behavior for historical
+        # re-tags (#2756). Kaladin deliberately omits --force and fails closed
+        # if its trusted source moves an existing release tag.
+        fetch_out, fetch_ok = _fetch_channel_tags(path, channel, timeout=15)
         if not fetch_ok:
             return {
                 'ok': False,
@@ -2007,6 +2093,27 @@ def apply_force_update(target: str, channel=None) -> dict:
                     'target': target,
                     'up_to_date': True,
                     'channel': channel,
+                }
+
+        if (
+            target == 'webui'
+            and channel == 'kaladin'
+            and not _can_fast_forward_to(path, compare_ref)
+        ):
+            containing_tags = _kaladin_tags_containing_head(path)
+            if containing_tags:
+                return {
+                    'ok': False,
+                    'message': (
+                        'Refusing to abandon a checkout preserved by Kaladin tag(s) '
+                        + ', '.join(containing_tags)
+                        + '. Preserve this checkout and ask the operator to resolve '
+                        'the tag provenance before retrying.'
+                    ),
+                    'target': target,
+                    'channel': channel,
+                    'refused_kaladin_checkout': True,
+                    'kaladin_tags': containing_tags,
                 }
 
         # Rewind guard (Codex CORE #3): refuse to reset --hard onto a ref that
@@ -2061,7 +2168,7 @@ def apply_force_update(target: str, channel=None) -> dict:
 
 
 def apply_update(target, channel=None):
-    """Stash, pull --ff-only, pop for the given target repo."""
+    """Stash, fast-forward to the selected ref, and restore local changes."""
     if channel is None:
         channel = _read_update_channel()
     channel = _normalize_channel(channel)
@@ -2128,9 +2235,10 @@ def _apply_update_inner(target, channel=DEFAULT_UPDATE_CHANNEL):
     if path is None or not (path / '.git').exists():
         return {'ok': False, 'message': 'Not a git repository'}
 
-    # Fetch before attempting pull, so the remote ref is current.
-    # --force so a remote re-tag doesn't block the update path (see #2756).
-    fetch_out, fetch_ok = _run_git(['fetch', 'origin', '--quiet', '--tags', '--force'], path, timeout=15)
+    # Fetch before applying so the selected ref is current. Kaladin's fixed
+    # source deliberately fails closed on moved tags; existing channels retain
+    # their historical force-fetch behavior (#2756).
+    fetch_out, fetch_ok = _fetch_channel_tags(path, channel, timeout=15)
     if not fetch_ok:
         if _is_git_lock_error(fetch_out):
             return {
@@ -2193,15 +2301,19 @@ def _apply_update_inner(target, channel=DEFAULT_UPDATE_CHANNEL):
             return {'ok': False, 'message': 'Failed to stash local changes'}
         stashed = True
 
-    # Pull with ff-only (no merge commits).
-    # Split tracking refs like 'origin/main' into separate remote + branch
-    # arguments — git treats 'origin/main' as a repository name otherwise.
-    remote, branch = _split_remote_ref(compare_ref)
-    pull_args = ['pull', '--ff-only']
-    if remote:
-        pull_args.extend([remote, branch])
+    if target == 'webui' and channel == 'kaladin':
+        # The fixed-source tag is already local. Do not let pull consult a branch
+        # or remote configuration outside the Kaladin channel trust boundary.
+        pull_args = ['merge', '--ff-only', compare_ref]
     else:
-        pull_args.extend(['origin', compare_ref])
+        # Pull with ff-only (no merge commits). Split tracking refs like
+        # 'origin/main' into separate remote + branch arguments.
+        remote, branch = _split_remote_ref(compare_ref)
+        pull_args = ['pull', '--ff-only']
+        if remote:
+            pull_args.extend([remote, branch])
+        else:
+            pull_args.extend(['origin', compare_ref])
     pull_out, pull_ok = _run_git(pull_args, path, timeout=30)
     if not pull_ok:
         if _is_git_lock_error(pull_out):
