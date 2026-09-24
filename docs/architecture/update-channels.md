@@ -6,7 +6,7 @@ The WebUI updater supports three channels. The setting applies only to the WebUI
 | --- | --- | --- | --- |
 | Stable | `v*` | configured `origin` | Existing release/branch behavior |
 | Experimental | `exp-v*` | configured `origin` | Existing release/branch behavior |
-| Kaladin | `kaladin-v*` | `https://github.com/snoyberg/hermes-webui.git` | Tag-only, fast-forward only |
+| Kaladin | `kaladin-v*` | `https://github.com/snoyberg/hermes-webui.git` | Tag-only; normal apply fast-forwards, force reset is guarded |
 
 Kaladin is a fixed-source channel. Each check or apply fetches the trusted URL in
 a temporary bare repository with inherited Git configuration, transport rewrites,
@@ -28,8 +28,15 @@ source repository rather than the checkout's `origin`.
 
 Normal Kaladin apply uses `git merge --ff-only <selected-object-id>` after the
 isolated fetch, then follows the updater's existing drain, restart, and reconnect
-flow. The destructive force-update path uses the same pinned object ID and refuses
-to abandon a checkout preserved by an authoritative Kaladin tag.
+flow. The destructive force-update path uses the same pinned object ID. It may
+replace ordinary divergent untagged commits, but refuses a reset that would make
+an authoritative Kaladin tag currently reachable from `HEAD` unreachable from
+the selected target.
+
+`/health` includes `webui_revision` when the process can resolve its loaded
+checkout to an exact 40-hex commit. The value is captured once at process import:
+an in-place checkout update does not change the reported identity until the
+WebUI process restarts and loads the new revision.
 
 Switching channels changes only the release family used for later WebUI checks;
 it does not rewrite the checkout immediately. Stable and Experimental retain
