@@ -15493,7 +15493,7 @@ def handle_post(handler, parsed) -> bool:
         # OLD channel. An explicit body channel (validated against the enum) wins;
         # otherwise fall back to the saved setting. (Fable UX gate.)
         channel = body.get("channel") if isinstance(body, dict) else None
-        if channel not in ("stable", "experimental"):
+        if channel not in ("stable", "experimental", "kaladin"):
             channel = settings.get("update_channel")
         from api.updates import check_for_updates
 
@@ -17790,7 +17790,7 @@ def handle_post(handler, parsed) -> bool:
         # hasn't landed can't make apply read the OLD saved channel (Codex gate).
         # Fall back to the saved setting when absent/invalid.
         _apply_channel = body.get("channel") if isinstance(body, dict) else None
-        if _apply_channel not in ("stable", "experimental"):
+        if _apply_channel not in ("stable", "experimental", "kaladin"):
             _apply_channel = None
         from api.updates import apply_update
 
@@ -17801,7 +17801,7 @@ def handle_post(handler, parsed) -> bool:
         if target not in ("webui", "agent"):
             return bad(handler, 'target must be "webui" or "agent"')
         _force_channel = body.get("channel") if isinstance(body, dict) else None
-        if _force_channel not in ("stable", "experimental"):
+        if _force_channel not in ("stable", "experimental", "kaladin"):
             _force_channel = None
         from api.updates import apply_force_update
 

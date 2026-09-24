@@ -618,7 +618,7 @@ api/
   routes.py       All GET + POST route handlers (if/elif dispatch, no decorators)
   state_sync.py   /insights sync — message_count to state.db
   streaming.py    SSE engine, run_agent, cancellation, compression
-  updates.py      Self-update check and release notes
+  updates.py      Self-update checks, fixed/tag channels, and release notes
   upload.py       Multipart parser, file upload handler
   workspace.py    File ops, workspace helpers, git detection
 ```

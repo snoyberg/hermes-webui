@@ -9040,6 +9040,9 @@ function _retryPreferencesAutosave(){
 }
 
 let _channelSaveSeq=0;
+function _normalizeUpdateChannel(value){
+  return ['stable','experimental','kaladin'].includes(value)?value:'stable';
+}
 // Last server-confirmed update_channel value. Seeded at panel hydration so the
 // failure-revert path always has a known-good value. _confirmedUpdateChannel is
 // the only reliable "previous" value: by the time a change event fires the
@@ -9052,12 +9055,14 @@ async function _saveUpdateChannelFromSelector(channelSel){
   // autosave payload never carries this field. A stale tab toggling an unrelated
   // preference must not overwrite a newer channel selection from another tab.
   if(!channelSel) return;
-  const val=channelSel.value==='experimental'?'experimental':'stable';
+  const val=['stable','experimental','kaladin'].includes(channelSel.value)
+    ?channelSel.value:'stable';
   const seq=++_channelSaveSeq;
   if(typeof _setPreferencesAutosaveStatus==='function') _setPreferencesAutosaveStatus('saving','channel');
   try{
     const saved=await _enqueueSettingsPost({method:'POST',body:JSON.stringify({update_channel:val})});
-    const confirmed=(saved&&(saved.update_channel==='experimental'||saved.update_channel==='stable'))
+    const confirmed=(saved&&typeof saved==='object'&&!Array.isArray(saved)
+      &&['stable','experimental','kaladin'].includes(saved.update_channel))
       ?saved.update_channel:val;
     _confirmedUpdateChannel=confirmed;
     // The queue makes the server state FIFO; the sequence guard protects only
@@ -9117,12 +9122,10 @@ async function loadSettingsPanel(){
     const webuiBadge = $('settings-webui-version-badge');
     if(webuiBadge){
       const chanVer = settings.update_channel_version || settings.webui_version || 'not detected';
-      const chan = settings.update_channel==='experimental' ? 'experimental' : 'stable';
-      // Only annotate the channel when on experimental — stable is the implicit
-      // default and needs no extra chrome.
-      webuiBadge.textContent = chan==='experimental'
-        ? `WebUI: ${chanVer} · Experimental`
-        : `WebUI: ${chanVer}`;
+      const chan = _normalizeUpdateChannel(settings.update_channel);
+      const channelLabel=chan==='experimental'?'Experimental':(chan==='kaladin'?'Kaladin':'');
+      webuiBadge.textContent = channelLabel
+        ? `WebUI: ${chanVer} · ${channelLabel}` : `WebUI: ${chanVer}`;
     }
     const agentBadge = $('settings-agent-version-badge');
     if(agentBadge){
@@ -9562,7 +9565,7 @@ async function loadSettingsPanel(){
     if(updateCb){updateCb.checked=settings.check_for_updates!==false;updateCb.addEventListener('change',_schedulePreferencesAutosave,{once:false});}
     const updateChannelSel=$('settingsUpdateChannel');
     if(updateChannelSel){
-      updateChannelSel.value=settings.update_channel==='experimental'?'experimental':'stable';
+      updateChannelSel.value=_normalizeUpdateChannel(settings.update_channel);
       _confirmedUpdateChannel=updateChannelSel.value; // #6612: seed revert baseline
       updateChannelSel.addEventListener('change',function(){
         // #6612: use the dedicated channel writer so generic preference autosaves
@@ -12242,9 +12245,11 @@ function _syncUpdateChannelBadge(channel){
     const badge=$('settings-webui-version-badge');
     if(!badge) return;
     let base=badge.textContent||'';
-    // Strip any existing " · Experimental" suffix, then re-append if needed.
-    base=base.replace(/\s·\sExperimental\s*$/,'');
-    badge.textContent = channel==='experimental' ? (base+' · Experimental') : base;
+    // Strip any existing channel suffix, then re-append the normalized selection.
+    base=base.replace(/\s·\s(?:Experimental|Kaladin)\s*$/,'');
+    const normalized=_normalizeUpdateChannel(channel);
+    const label=normalized==='experimental'?'Experimental':(normalized==='kaladin'?'Kaladin':'');
+    badge.textContent = label ? (base+' · '+label) : base;
   }catch(e){}
 }
 
@@ -12266,7 +12271,7 @@ async function checkUpdatesNow(channelOverride){
     // and answer for the previous channel. Omit otherwise → server uses the
     // saved setting. (Fable UX gate.)
     const _checkBody={force:true};
-    if(channelOverride==='stable'||channelOverride==='experimental') _checkBody.channel=channelOverride;
+    if(['stable','experimental','kaladin'].includes(channelOverride)) _checkBody.channel=channelOverride;
     const data=await api('/api/updates/check',{method:'POST',body:JSON.stringify(_checkBody),timeoutMs:300000});
     if(data.disabled){
       if(status){status.textContent=t('settings_updates_disabled');status.style.color='var(--muted)';}

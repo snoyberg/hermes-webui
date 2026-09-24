@@ -10788,7 +10788,7 @@ async function applyUpdates(){
       // channel; agent is channel-neutral server-side so omitting it is fine.
       const _applyBody={target};
       const _ch=window._updateData?.[target]?.channel;
-      if(_ch==='stable'||_ch==='experimental') _applyBody.channel=_ch;
+      if(['stable','experimental','kaladin'].includes(_ch)) _applyBody.channel=_ch;
       const res=await api('/api/updates/apply',{method:'POST',body:JSON.stringify(_applyBody),timeoutMs:120000});
       if(!res.ok){
         _showUpdateError(target,res);
@@ -10991,7 +10991,7 @@ async function forceUpdate(btn){
   if(errEl){errEl.style.display='none';}
   try{
     const baselineServerIdentity = await _readHealthServerIdentity();
-    const res=await api('/api/updates/force',{method:'POST',body:JSON.stringify((()=>{const b={target};const _ch=window._updateData?.[target]?.channel;if(_ch==='stable'||_ch==='experimental')b.channel=_ch;return b;})()),timeoutMs:120000});
+    const res=await api('/api/updates/force',{method:'POST',body:JSON.stringify((()=>{const b={target};const _ch=window._updateData?.[target]?.channel;if(['stable','experimental','kaladin'].includes(_ch))b.channel=_ch;return b;})()),timeoutMs:120000});
     if(!res.ok){
       if(errEl){errEl.textContent='Force update failed: '+(res.message||'unknown error');errEl.style.display='block';}
       btn.disabled=false;btn.textContent='Force update';
