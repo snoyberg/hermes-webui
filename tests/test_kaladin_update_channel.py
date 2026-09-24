@@ -54,13 +54,15 @@ def _repo_with_kaladin_history(tmp_path):
 
 
 def _trusted_refs(repo):
-    out = _git(
-        repo,
-        "for-each-ref",
-        "--format=%(refname:strip=4) %(objectname)",
-        "refs/hermes-webui/kaladin/tags/",
-        capture=True,
+    result = subprocess.run(
+        [
+            "git", "for-each-ref", "--format=%(refname:strip=4) %(objectname)",
+            "refs/hermes-webui/kaladin/tags/",
+        ],
+        cwd=str(repo), check=True, text=True, env=updates._trusted_git_env(),
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE,
     )
+    out = result.stdout.strip()
     return dict(line.split(" ", 1) for line in out.splitlines() if line)
 
 
@@ -119,6 +121,14 @@ def test_trusted_fetch_ignores_checkout_global_and_environment_instead_of(tmp_pa
     monkeypatch.setenv("GIT_CONFIG_COUNT", "1")
     monkeypatch.setenv("GIT_CONFIG_KEY_0", f"url.{malicious.as_uri()}.insteadOf")
     monkeypatch.setenv("GIT_CONFIG_VALUE_0", trusted_url)
+    # Repository-shaping variables must not redirect any command in the isolated
+    # fetch pipeline back into attacker-selected object/ref/config storage.
+    monkeypatch.setenv("GIT_COMMON_DIR", str(malicious))
+    monkeypatch.setenv("GIT_OBJECT_DIRECTORY", str(malicious / "objects"))
+    monkeypatch.setenv("GIT_ALTERNATE_OBJECT_DIRECTORIES", str(malicious / "objects"))
+    monkeypatch.setenv("GIT_NAMESPACE", "attacker")
+    monkeypatch.setenv("GIT_INDEX_FILE", str(tmp_path / "attacker-index"))
+    monkeypatch.setenv("GIT_CEILING_DIRECTORIES", str(tmp_path))
     monkeypatch.setitem(updates._CHANNEL_SOURCE_URLS, "kaladin", trusted_url)
 
     out, ok = updates._fetch_channel_tags(checkout, "kaladin")
@@ -128,6 +138,39 @@ def test_trusted_fetch_ignores_checkout_global_and_environment_instead_of(tmp_pa
         "kaladin-v1.0.0": first,
         "kaladin-v1.1.0": second,
     }
+
+
+def test_trusted_git_environment_scrubs_all_git_process_overrides(monkeypatch):
+    representative = {
+        "GIT_DIR": "/attacker/git-dir",
+        "GIT_WORK_TREE": "/attacker/work-tree",
+        "GIT_COMMON_DIR": "/attacker/common-dir",
+        "GIT_OBJECT_DIRECTORY": "/attacker/objects",
+        "GIT_ALTERNATE_OBJECT_DIRECTORIES": "/attacker/alternate",
+        "GIT_NAMESPACE": "attacker",
+        "GIT_INDEX_FILE": "/attacker/index",
+        "GIT_CEILING_DIRECTORIES": "/attacker",
+        "GIT_CONFIG": "/attacker/config",
+        "GIT_CONFIG_PARAMETERS": "'url.evil.insteadOf'='https://trusted/'",
+        "GIT_CONFIG_KEY_0": "url.evil.insteadOf",
+        "GIT_CONFIG_VALUE_0": "https://trusted/",
+        "GIT_EXEC_PATH": "/attacker/bin",
+        "GIT_TEMPLATE_DIR": "/attacker/templates",
+        "GIT_SHALLOW_FILE": "/attacker/shallow",
+        "GIT_REPLACE_REF_BASE": "refs/attacker/replace/",
+    }
+    for key, value in representative.items():
+        monkeypatch.setenv(key, value)
+    monkeypatch.setenv("SSH_AUTH_SOCK", "/safe/agent.sock")
+    monkeypatch.setenv("HTTPS_PROXY", "http://proxy.example:8080")
+
+    env = updates._trusted_git_env()
+
+    assert not (set(representative) & set(env))
+    assert env["SSH_AUTH_SOCK"] == "/safe/agent.sock"
+    assert env["HTTPS_PROXY"] == "http://proxy.example:8080"
+    assert env["PATH"]
+    assert env.get("HOME") == updates.os.environ.get("HOME")
 
 
 def test_malicious_shared_local_tag_is_never_selected(tmp_path, monkeypatch):
@@ -334,7 +377,7 @@ def test_kaladin_force_reset_uses_pinned_oid_when_refs_move_after_selection(tmp_
 def test_concurrent_authoritative_namespace_change_fails_fetch_closed(tmp_path, monkeypatch):
     remote, _source, checkout, first, _second = _repo_with_kaladin_history(tmp_path)
     monkeypatch.setitem(updates._CHANNEL_SOURCE_URLS, "kaladin", remote.as_uri())
-    real_run_git_input = updates._run_git_input
+    real_run_git_input = updates._run_trusted_git_input
 
     def racing_update_ref(args, cwd, stdin_text, timeout=10):
         subprocess.run(
@@ -344,7 +387,7 @@ def test_concurrent_authoritative_namespace_change_fails_fetch_closed(tmp_path, 
         )
         return real_run_git_input(args, cwd, stdin_text, timeout=timeout)
 
-    monkeypatch.setattr(updates, "_run_git_input", racing_update_ref)
+    monkeypatch.setattr(updates, "_run_trusted_git_input", racing_update_ref)
     out, ok = updates._fetch_channel_tags(checkout, "kaladin")
 
     assert not ok
@@ -371,6 +414,35 @@ def test_kaladin_force_refuses_to_abandon_tag_reachable_head(tmp_path, monkeypat
     assert result.get("refused_kaladin_checkout") is True, result
     assert "preserve" in result["message"].lower()
     assert _git(checkout, "rev-parse", "HEAD", capture=True) == first
+
+
+def test_kaladin_force_resets_ordinary_untagged_divergence(tmp_path, monkeypatch):
+    remote, _source, checkout, _first, second = _repo_with_kaladin_history(tmp_path)
+    monkeypatch.setitem(updates._CHANNEL_SOURCE_URLS, "kaladin", remote.as_uri())
+    assert updates._fetch_channel_tags(checkout, "kaladin")[1]
+    _git(checkout, "commit", "--allow-empty", "-q", "-m", "local untagged commit")
+    local_head = _git(checkout, "rev-parse", "HEAD", capture=True)
+    monkeypatch.setattr(updates, "REPO_ROOT", checkout)
+    monkeypatch.setattr(updates, "_schedule_restart", MagicMock())
+    monkeypatch.setattr(
+        updates,
+        "_restart_blocker_snapshot",
+        lambda: {"restart_blocked": False, "active_streams": 0, "active_runs": 0},
+    )
+
+    info = updates._check_repo_release(checkout, "webui", "kaladin")
+    assert info["behind"] > 0
+    assert info["diverged"] is True
+    assert "error" not in info
+
+    normal = updates._apply_update_inner("webui", "kaladin")
+    assert normal["ok"] is False
+    assert normal["diverged"] is True
+
+    forced = updates.apply_force_update("webui", channel="kaladin")
+    assert forced["ok"] is True, forced
+    assert local_head != second
+    assert _git(checkout, "rev-parse", "HEAD", capture=True) == second
 
 
 def test_config_accepts_kaladin_update_channel(tmp_path, monkeypatch):
