@@ -14797,7 +14797,7 @@ async function applyUpdates(opts){
       // channel; agent is channel-neutral server-side so omitting it is fine.
       const _applyBody={target};
       const _ch=window._updateData?.[target]?.channel;
-      if(_ch==='stable'||_ch==='experimental') _applyBody.channel=_ch;
+      if(['stable','experimental','kaladin'].includes(_ch)) _applyBody.channel=_ch;
       if(forceActiveRuns) _applyBody.force_active_runs=true;
       const res=await api('/api/updates/apply',{method:'POST',body:JSON.stringify(_applyBody),timeoutMs:120000});
       if(!res.ok){
@@ -15086,7 +15086,7 @@ async function forceUpdate(btn,opts){
     const baselineServerIdentity = await _readHealthServerIdentity();
     const _forceBody={target};
     const _ch=window._updateData?.[target]?.channel;
-    if(_ch==='stable'||_ch==='experimental') _forceBody.channel=_ch;
+    if(['stable','experimental','kaladin'].includes(_ch)) _forceBody.channel=_ch;
     if(forceActiveRuns) _forceBody.force_active_runs=true;
     const res=await api('/api/updates/force',{method:'POST',body:JSON.stringify(_forceBody),timeoutMs:120000});
     if(!res.ok){
