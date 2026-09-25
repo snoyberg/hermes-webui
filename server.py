@@ -100,6 +100,11 @@ from urllib.parse import urlparse
 # Hermes' managed runtime activates its dependencies on importing the agent.
 # Bootstrap validated the same import before launching this process.
 if os.environ.get("HERMES_WEBUI_AGENT_DIR"):
+    # The Agent bootstrap hardens sys.path and removes the script's empty-path
+    # entry. Preserve the WebUI package root for subsequent `api` imports.
+    webui_root = os.path.dirname(os.path.abspath(__file__))
+    if webui_root not in sys.path:
+        sys.path.insert(0, webui_root)
     from run_agent import AIAgent  # noqa: F401
 
 logger = logging.getLogger(__name__)
