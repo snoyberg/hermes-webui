@@ -97,6 +97,11 @@ except ImportError:  # pragma: no cover - resource is Unix-only
     resource = None
 from urllib.parse import urlparse
 
+# Hermes' managed runtime activates its dependencies on importing the agent.
+# Bootstrap validated the same import before launching this process.
+if os.environ.get("HERMES_WEBUI_AGENT_DIR"):
+    from run_agent import AIAgent  # noqa: F401
+
 logger = logging.getLogger(__name__)
 
 from api.auth import check_auth, reset_trusted_auth_request_state
