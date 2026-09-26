@@ -2914,7 +2914,7 @@ def _get_cached_session_list_payload(
         )
     return payload
 
-from api.runtime_identity import WEBUI_REVISION
+from api.runtime_identity import WEBUI_REVISION, AGENT_GENERATION
 from api.config import (
     STATE_DIR,
     SESSION_DIR,
@@ -13207,6 +13207,8 @@ def _handle_health(handler, parsed):
     }
     if WEBUI_REVISION is not None:
         payload["webui_revision"] = WEBUI_REVISION
+    if AGENT_GENERATION is not None:
+        payload["agent_generation"] = AGENT_GENERATION
     if "oldest_run_age_seconds" in run_check:
         payload["oldest_run_age_seconds"] = run_check["oldest_run_age_seconds"]
     if "idle_seconds_since_last_run" in run_check:
