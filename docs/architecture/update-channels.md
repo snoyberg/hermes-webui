@@ -41,7 +41,13 @@ the selected target.
 `/health` includes `webui_revision` when the process can resolve its loaded
 checkout to an exact 40-hex commit. The value is captured once at process import:
 an in-place checkout update does not change the reported identity until the
-WebUI process restarts and loads the new revision.
+WebUI process restarts and loads the new revision. When the server imported
+`run_agent` from a Git checkout and its actual process import path includes the
+PM-selected dependency environment, `/health` also reports `agent_generation`
+(source commit, selected environment path, SHA-256 of the PM-resolved lock).
+Missing or unresolvable Agent/dependency identity is omitted, not inferred from
+configuration, version strings, or the current checkout alone. This is evidence
+for a future exact-generation install gate, not an Agent rollback mechanism.
 
 Switching channels changes only the release family used for later WebUI checks;
 it does not rewrite the checkout immediately. Stable and Experimental retain
