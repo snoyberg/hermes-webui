@@ -46,8 +46,13 @@ WebUI process restarts and loads the new revision. When the server imported
 PM-selected dependency environment, `/health` also reports `agent_generation`
 (source commit, selected environment path, SHA-256 of the PM-resolved lock).
 Missing or unresolvable Agent/dependency identity is omitted, not inferred from
-configuration, version strings, or the current checkout alone. This is evidence
-for a future exact-generation install gate, not an Agent rollback mechanism.
+configuration, version strings, or the current checkout alone. The external
+Kaladin release producer binds this exact identity into its verification evidence;
+the independent observer must compare it before adopting an installed release or
+claiming recovery. This is not an Agent rollback mechanism. Native Update Now
+moves the checkout and restarts; it does not write an external deployment adapter's
+revision file. An independent observer must reconcile that record from exact
+loaded-process health, not assume native apply has updated it.
 
 Switching channels changes only the release family used for later WebUI checks;
 it does not rewrite the checkout immediately. Stable and Experimental retain
