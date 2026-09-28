@@ -66,7 +66,10 @@ def test_real_managed_bootstrap_preserves_named_profile_concurrency(tmp_path):
             import importlib, importlib.util, json, os, sys, sysconfig, threading, types
             from pathlib import Path
 
+            identity_imports = []
             def deny_external_effects(event, args):
+                if event == "exec" and args[0].co_filename.endswith("/api/runtime_identity.py"):
+                    identity_imports.append("run_agent" in sys.modules)
                 if event == "subprocess.Popen":
                     command = args[1]
                     if (isinstance(command, list) and Path(command[0]).name == "git"
@@ -91,8 +94,12 @@ def test_real_managed_bootstrap_preserves_named_profile_concurrency(tmp_path):
             (selected / "dependencies.pth").write_text(
                 sysconfig.get_path("purelib") + "\\n" + sys.argv[1] + "\\n", encoding="utf-8")
             (selected / "managed_startup_marker.py").write_text("activated = True\\n", encoding="utf-8")
+            lock = generation.parent / "workspace" / "uv.lock"
+            lock.parent.mkdir()
+            lock.write_bytes((source / "uv.lock").read_bytes())
             runtime_facts_path(source).write_text(json.dumps({
-                "packages": {"venv": {"environment": str(generation)}}}), encoding="utf-8")
+                "packages": {"venv": {"environment": str(generation),
+                                      "resolved_lock": str(lock)}}}), encoding="utf-8")
             assert importlib.util.find_spec("managed_startup_marker") is None
 
             # Do not read the checkout's project .env or invoke secret helpers.
@@ -107,6 +114,46 @@ def test_real_managed_bootstrap_preserves_named_profile_concurrency(tmp_path):
             assert managed_startup_marker.activated
             assert "hermes_bootstrap" in sys.modules
             assert str(selected) in sys.path
+
+            # Exercise the real health handler after the real server import;
+            # identity capture itself precedes the deferred Agent import.
+            import hashlib, io, subprocess
+            from urllib.parse import urlparse
+            from api import routes
+            assert identity_imports == [False]
+            expected = {
+                "source_revision": subprocess.check_output(
+                    ["git", "rev-parse", "HEAD"], cwd=source, text=True).strip(),
+                "environment": str(generation),
+                "dependency_lock_sha256": hashlib.sha256(lock.read_bytes()).hexdigest(),
+            }
+            class HealthHandler:
+                def __init__(self):
+                    self.wfile = io.BytesIO()
+                def send_response(self, status):
+                    assert status == 200
+                def send_header(self, *args):
+                    pass
+                def end_headers(self):
+                    pass
+            def health():
+                handler = HealthHandler()
+                routes._handle_health(handler, urlparse("/health"))
+                return json.loads(handler.wfile.getvalue())
+            payload = health()
+            assert payload.get("agent_generation") == expected, "startup health lost loaded PM identity"
+            assert payload["webui_revision"] == subprocess.check_output(
+                ["git", "rev-parse", "HEAD"], text=True).strip()
+            print("startup health identity: " + json.dumps(payload, sort_keys=True))
+            from api import runtime_identity
+            selected_index = sys.path.index(str(selected))
+            sys.path.pop(selected_index)
+            assert runtime_identity._loaded_agent_generation() is None, "unloaded PM selection claimed"
+            sys.path.insert(selected_index, str(selected))
+            # Identity is a boot snapshot, not a later read of selection/lock state.
+            runtime_facts_path(source).write_text("{}", encoding="utf-8")
+            lock.write_text("changed after startup", encoding="utf-8")
+            assert health()["agent_generation"] == expected
 
             import api.config as config
             from api import profiles
@@ -176,4 +223,5 @@ def test_real_managed_bootstrap_preserves_named_profile_concurrency(tmp_path):
         cwd=ROOT, env=env, capture_output=True, text=True, timeout=60,
     )
     assert result.returncode == 0, result.stdout + result.stderr
+    print(result.stdout)
     assert "two turn scopes + catalog progressed" in result.stdout
