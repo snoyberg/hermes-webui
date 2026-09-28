@@ -39,7 +39,7 @@ def _capture_agent_generation(source: Path, facts_path: Path, loaded_environment
     try:
         source = source.resolve(strict=True)
         root = source.parent
-        if source.name != "run_agent.py" or not (root / ".git").exists():
+        if source.name not in {"run_agent.py", "hermes_bootstrap.py"} or not (root / ".git").exists():
             return None
         revision = _capture_webui_revision(root)
         if revision is None:
@@ -66,7 +66,10 @@ def _capture_agent_generation(source: Path, facts_path: Path, loaded_environment
 
 
 def _loaded_agent_generation() -> dict | None:
-    agent = sys.modules.get("run_agent")
+    # Managed startup activates PM through bootstrap, leaving run_agent deferred
+    # until config has selected the profile. Inspect loaded modules only: importing
+    # run_agent here would cache profile-sensitive paths under the wrong home.
+    agent = sys.modules.get("run_agent") or sys.modules.get("hermes_bootstrap")
     source = getattr(agent, "__file__", None)
     if not source:
         return None
