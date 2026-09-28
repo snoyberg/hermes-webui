@@ -42,9 +42,13 @@ the selected target.
 checkout to an exact 40-hex commit. The value is captured once at process import:
 an in-place checkout update does not change the reported identity until the
 WebUI process restarts and loads the new revision. When the server imported
-`run_agent` from a Git checkout and its actual process import path includes the
-PM-selected dependency environment, `/health` also reports `agent_generation`
-(source commit, selected environment path, SHA-256 of the PM-resolved lock).
+`run_agent` or the dependency-only `hermes_bootstrap` from a Git checkout and its
+actual process import path includes the PM-selected dependency environment,
+`/health` also reports `agent_generation` (source commit, selected environment
+path, SHA-256 of the PM-resolved lock). Bootstrap-based capture leaves `run_agent`
+deferred until profile selection; it does not import profile-sensitive modules
+for identity reporting. The generation is captured once at import, not refreshed
+from later changes to the checkout, PM selection, or lock.
 Missing or unresolvable Agent/dependency identity is omitted, not inferred from
 configuration, version strings, or the current checkout alone. The external
 Kaladin release producer binds this exact identity into its verification evidence;
