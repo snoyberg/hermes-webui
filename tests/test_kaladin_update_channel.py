@@ -83,6 +83,42 @@ def test_kaladin_channel_contract_is_fixed_and_source_scoped():
     ]
 
 
+def test_kaladin_no_git_does_not_advertise_upstream_release(tmp_path, monkeypatch):
+    monkeypatch.setattr(updates, "_check_webui_published_release_update", lambda: {
+        "name": "webui", "behind": 2, "repo_url": "https://github.com/nesquena/hermes-webui",
+    })
+    assert updates._check_repo(tmp_path, "webui", "kaladin") == {
+        "name": "webui", "behind": None, "no_git": True,
+    }
+
+
+def test_kaladin_apply_rejects_checkout_local_executable_filter(tmp_path, monkeypatch):
+    remote, _source, checkout, first, _second = _repo_with_kaladin_history(tmp_path)
+    _git(checkout, "config", "filter.unsafe.smudge", "false")
+    monkeypatch.setitem(updates._CHANNEL_SOURCE_URLS, "kaladin", remote.as_uri())
+    monkeypatch.setattr(updates, "REPO_ROOT", checkout)
+    monkeypatch.setattr(updates, "_schedule_restart", MagicMock())
+    result = updates._apply_update_inner("webui", "kaladin")
+    assert result["ok"] is False
+    assert "filter" in result["message"].lower()
+    assert _git(checkout, "rev-parse", "HEAD", capture=True) == first
+
+
+def test_kaladin_force_apply_rejects_executable_filter_before_reset(tmp_path, monkeypatch):
+    remote, _source, checkout, first, _second = _repo_with_kaladin_history(tmp_path)
+    _git(checkout, "config", "filter.unsafe.process", "false")
+    monkeypatch.setitem(updates._CHANNEL_SOURCE_URLS, "kaladin", remote.as_uri())
+    monkeypatch.setattr(updates, "REPO_ROOT", checkout)
+    monkeypatch.setattr(updates, "_schedule_restart", MagicMock())
+    monkeypatch.setattr(updates, "_restart_blocker_snapshot", lambda: {
+        "restart_blocked": False, "active_streams": 0, "active_runs": 0,
+    })
+    result = updates.apply_force_update("webui", channel="kaladin")
+    assert result["ok"] is False
+    assert "filter" in result["message"].lower()
+    assert _git(checkout, "rev-parse", "HEAD", capture=True) == first
+
+
 def test_existing_channel_fetch_contract_is_unchanged():
     for channel in ("stable", "experimental"):
         assert updates._channel_source_url(channel) is None
