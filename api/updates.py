@@ -930,6 +930,23 @@ def _run_kaladin_git(args, path, *, timeout=15):
     return stderr or stdout or f'git exited with status {result.returncode}', False
 
 
+def _kaladin_executable_filter_failure(path):
+    """Fail closed before checkout mutations when local config defines Git filters."""
+    names, ok = _run_kaladin_git(['config', '--name-only', '--list'], path)
+    if not ok:
+        return {'ok': False, 'message': 'Could not inspect Kaladin checkout Git configuration.'}
+    if any(
+        name.lower().startswith('filter.')
+        and name.lower().rsplit('.', 1)[-1] in {'smudge', 'process', 'clean'}
+        for name in (names or '').splitlines()
+    ):
+        return {
+            'ok': False,
+            'message': 'Kaladin update refused: executable Git filter configured in checkout.',
+        }
+    return None
+
+
 def _run_kaladin_git_input(args, path, stdin_text, *, timeout=10):
     """Run a hardened Kaladin Git command with transactional stdin."""
     command, error = _kaladin_git_command(args, path)
@@ -1696,7 +1713,7 @@ def _check_repo(path, name, channel=DEFAULT_UPDATE_CHANNEL):
     """
     channel = _normalize_channel(channel)
     if path is None or not (path / '.git').exists():
-        if name == 'webui':
+        if name == 'webui' and channel != 'kaladin':
             release_info = _check_webui_published_release_update()
             if release_info is not None:
                 release_info = dict(release_info)
@@ -2494,6 +2511,11 @@ def apply_force_update(target: str, channel=None) -> dict:
         if path is None or not (path / '.git').exists():
             return {'ok': False, 'message': 'Not a git repository'}
 
+        if target == 'webui' and channel == 'kaladin':
+            filter_failure = _kaladin_executable_filter_failure(path)
+            if filter_failure is not None:
+                return filter_failure
+
         # NOTE: v2 of PR #5688 removed the prior stale-lock cleanup loop from
         # this entry point. The mtime-based heuristic was empirically proven
         # unsafe (a live `git add` was shown to hold .git/index.lock past 31 s
@@ -2701,6 +2723,10 @@ def _apply_update_inner(target, channel=DEFAULT_UPDATE_CHANNEL):
         return {'ok': False, 'message': 'Not a git repository'}
 
     trusted_kaladin = target == 'webui' and channel == 'kaladin'
+    if trusted_kaladin:
+        filter_failure = _kaladin_executable_filter_failure(path)
+        if filter_failure is not None:
+            return filter_failure
     run_git = _run_kaladin_git if trusted_kaladin else _run_git
 
     # Fetch before applying so the selected ref is current. Kaladin's fixed
