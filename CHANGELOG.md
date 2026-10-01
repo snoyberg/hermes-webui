@@ -44,6 +44,11 @@
 
 ### Fixed
 
+- **A chat start that fails before the agent runs no longer leaves a phantom message behind.** With eager
+  session saving on, the submitted prompt was written to disk before setup finished. If the start was then
+  rejected, that prompt stayed in the transcript as a turn that never ran, and a retry showed it twice. A
+  rejected start now restores the session as it was before the attempt, keeps any recovery backup that
+  already existed, and puts back pending wake-up markers it had consumed. (#7193, #7249 by @rodboev)
 - **Renaming, moving or archiving a session no longer overwrites a newer save.** These three actions looked the
   session up before taking its lock. If the in-memory cache evicted it in between and something else (a draft
   autosave, for example) saved a newer copy, the action then saved its stale copy over it, silently undoing the
