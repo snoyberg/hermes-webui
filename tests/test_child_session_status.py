@@ -26,7 +26,7 @@ const raw={json.dumps(raw)}, refs={json.dumps(references)};
 const before=JSON.stringify([raw,refs]);
 const result=renderFixture(raw,refs,{json.dumps(expanded)},{json.dumps(active)});
 const nodes=flatten(result.element);
-const chip=nodes.find(e=>e.className==='session-child-count');
+const chip=nodes.find(e=>(e.className||'').split(' ').includes('session-child-count'));
 const children=nodes.filter(e=>(e.className||'').split(' ').includes('session-child-session'));
 (async()=>{{
   for(const child of children){{
@@ -136,7 +136,7 @@ def test_reference_only_running_child_has_status_even_without_visible_descendant
     reference = session("child", "streaming", archived=True, parent_session_id="parent",
                         _lineage_root_id="child", relationship_type="child_session")
     out = run_component([parent], [parent, reference], False, "other")
-    assert out["chip"]["textContent"] == "Child sessions"
+    assert out["chip"]["textContent"] == "Child sessions (archived)"
     assert "is-streaming" in out["chip"]["children"][0]["className"]
     assert "role" not in out["chip"]["attributes"], "Reference-only status is not an empty expander"
     assert not out["children"]
