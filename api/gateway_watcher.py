@@ -55,7 +55,7 @@ def _snapshot_hash(sessions: list) -> str:
 # ``exclude_sources`` used by ``read_importable_agent_session_rows`` so the
 # cheap change-detection scan below sees exactly the same row set as the
 # expensive projection (otherwise cron message churn would defeat the gate).
-_WATCHER_EXCLUDED_SOURCES = ("cron", "webui")
+_WATCHER_EXCLUDED_SOURCES = ("cron", "webui", "tool")
 
 
 def _cheap_change_fingerprint(db_path: Path) -> str | None:
