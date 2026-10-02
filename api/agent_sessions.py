@@ -681,7 +681,7 @@ def read_importable_agent_session_rows(
     db_path: Path,
     limit: int | None = 200,
     log=None,
-    exclude_sources: tuple[str, ...] | None = ("cron", "webui"),
+    exclude_sources: tuple[str, ...] | None = ("cron", "webui", "tool"),
     include_sources: tuple[str, ...] | None = None,
     project_assignment: str | None = None,
     project_ids: tuple[str, ...] | None = None,
