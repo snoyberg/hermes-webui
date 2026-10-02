@@ -293,10 +293,16 @@ and 5; it does not mark every run-state boundary implemented.
 A conversation row's notification indicator reflects only that conversation's
 own running, unread-completion, or approval/clarification state. Nested child
 sessions (including attached forks) must not light the parent's dot, hide its
-timestamp, or add unread/attention styling to it. Child state remains available
-on expanded child rows; rendering the parent does not acknowledge its children.
-Child activity may still affect sidebar ordering. Compression-lineage segments
-remain one logical conversation and are not delegated child sessions.
+timestamp, or add unread/attention styling to it. A separate status mark on the
+child-count chip exposes aggregated child state even while collapsed, including
+reference-only archived children. Approval takes precedence over clarification,
+then other attention, running, and unread completion. Expanded fork and delegated
+child rows expose their own running, unread, and attention states. Rendering or
+expanding the parent does not acknowledge its children; visiting a child retains
+its per-session acknowledgement semantics. Reference-only state does not make
+hidden archived children navigable. Child activity may still affect sidebar
+ordering. Compression-lineage segments remain one logical conversation and are
+not delegated child sessions.
 
 ## Client-side unread persistence (sidebar layer)
 
