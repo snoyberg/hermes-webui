@@ -137,6 +137,74 @@ def main():
                 page.keyboard.press('Enter')
             assert page.evaluate('opened') == [{'sid': 'delegated', 'options': {'skipLineageResolve': True}}]
             context.close()
+        # Reference-only chips have no disclosure/count and must fit SIDEBAR_MIN.
+        context = browser.new_context(viewport={'width': 1280, 'height': 800})
+        page = context.new_page()
+        page.on('pageerror', lambda error: errors.append(str(error)))
+        page.set_content('<main id="fixture" style="padding:8px;box-sizing:border-box;background:var(--sidebar)"></main>')
+        page.add_style_tag(content=(ROOT / 'static/style.css').read_text())
+        page.add_script_tag(content=component_script())
+        page.add_script_tag(content=(ROOT / 'static/i18n.js').read_text())
+        locales = page.evaluate('Object.keys(LOCALES)')
+        for sidebar_width in [180, 240, 300, 360]:
+            page.locator('#fixture').evaluate('(el,width)=>el.style.width=width+"px"', sidebar_width)
+            for locale in locales:
+                for skin in SKINS:
+                    for dark in [False, True]:
+                        for state in ['approval', 'clarify', 'streaming', 'unread']:
+                            data = page.evaluate(r"""([locale,skin,dark,state])=>{
+                              document.documentElement.dataset.skin=skin;
+                              document.documentElement.classList.toggle('dark',dark);
+                              setLocale(locale);
+                              const parent={session_id:'parent',title:'Parent conversation with a long title',message_count:3,last_message_at:10};
+                              const reference={session_id:'archived',archived:true,parent_session_id:'parent',
+                                _lineage_root_id:'archived',relationship_type:'child_session',message_count:3,
+                                is_streaming:state==='streaming',has_unread:state==='unread',
+                                attention:['approval','clarify'].includes(state)?{kind:state,count:1}:null};
+                              const result=renderFixture([parent],[parent,reference],false,'parent');
+                              document.querySelector('#fixture').replaceChildren(result.element);
+                              for(const el of [document.scrollingElement,document.querySelector('#fixture'),result.element,...result.element.querySelectorAll('*')]) el.scrollLeft=0;
+                              const chip=document.querySelector('.session-child-count'), dot=chip.querySelector('.session-child-count-state');
+                              const rect=el=>{const r=el.getBoundingClientRect();return {left:r.left,right:r.right,top:r.top,bottom:r.bottom,width:r.width,height:r.height};};
+                              const box=rect(result.element), mark=rect(dot), pill=rect(chip), titleRow=rect(chip.parentElement);
+                              const ds=getComputedStyle(dot);
+                              const probe=document.createElement('span');probe.style.color=`var(--${state==='approval'?'error':state==='clarify'?'warning':'accent'})`;
+                              document.body.appendChild(probe);const expectedColor=getComputedStyle(probe).color;probe.remove();
+                              return {box,mark,pill,titleRow,title:chip.title,aria:chip.getAttribute('aria-label'),
+                                label:t('session_child_archived'),text:chip.textContent,dotColor:ds.color,expectedColor,
+                                display:ds.display,visibility:ds.visibility,opacity:ds.opacity,
+                                role:chip.getAttribute('role'),tabindex:chip.getAttribute('tabindex'),
+                                ownDot:result.element.querySelector(':scope > .session-attention-indicator').className,
+                                children:result.element.querySelectorAll('.session-child-session').length};
+                            }""", [locale, skin, dark, state])
+                            reasons = []
+                            for name in ['mark', 'pill']:
+                                r = data[name]
+                                for container in ['box', 'titleRow']:
+                                    b = data[container]
+                                    if r['left'] < b['left'] - 0.5 or r['right'] > b['right'] + 0.5 or r['top'] < b['top'] - 0.5 or r['bottom'] > b['bottom'] + 0.5:
+                                        reasons.append(f'{name} clipped outside {container}')
+                            if data['mark']['width'] != 10 or data['mark']['height'] != 10 or data['display'] == 'none' or data['visibility'] != 'visible' or data['opacity'] == '0':
+                                reasons.append('status mark not fully visible at 10px')
+                            if data['dotColor'] != data['expectedColor']:
+                                reasons.append('active parent neutralizes archived indicator color')
+                            if not data['title'].endswith(' · ' + data['label']) or data['text'] != data['label'] or data['aria'] not in (None, data['title']):
+                                reasons.append('localized label or full tooltip/aria lost')
+                            if data['role'] is not None or data['tabindex'] is not None or data['children']:
+                                reasons.append('reference-only chip became navigable')
+                            if any(c.startswith('is-') for c in data['ownDot'].split()):
+                                reasons.append('reference state leaked into own dot')
+                            if locale in ['en', 'pl'] and skin == 'github' and state == 'approval':
+                                name = f'archived-{sidebar_width}-{locale}-{skin}-{"dark" if dark else "light"}.png'
+                                page.screenshot(path=str(args.output / name))
+                                screenshots.append(name)
+                            page.locator('.session-child-count').click()
+                            if page.evaluate('opened.length') or page.locator('.session-child-session').count():
+                                reasons.append('reference click navigates or expands')
+                            row = {'scene': 'reference-only', 'sidebar_width': sidebar_width, 'locale': locale, 'skin': skin, 'dark': dark, 'state': state, **data, 'failures': reasons}
+                            results.append(row)
+                            failures.extend({k: row[k] for k in ['scene', 'sidebar_width', 'locale', 'skin', 'dark', 'state']} | {'reason': r} for r in reasons)
+        context.close()
         browser.close()
     report = {'cases': len(results), 'screenshots': sorted(set(screenshots)), 'errors': errors, 'failures': failures, 'results': results}
     (args.output / 'report.json').write_text(json.dumps(report, ensure_ascii=False, indent=2))
