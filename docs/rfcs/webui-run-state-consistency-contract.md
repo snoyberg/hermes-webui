@@ -268,6 +268,16 @@ and 5; it does not mark every run-state boundary implemented.
    timestamp (falling back to run start), so a long-running turn cancelled
    moments ago is never mistaken for an orphan.
 
+## Sidebar notification ownership
+
+A conversation row's notification indicator reflects only that conversation's
+own running, unread-completion, or approval/clarification state. Nested child
+sessions (including attached forks) must not light the parent's dot, hide its
+timestamp, or add unread/attention styling to it. Child state remains available
+on expanded child rows; rendering the parent does not acknowledge its children.
+Child activity may still affect sidebar ordering. Compression-lineage segments
+remain one logical conversation and are not delegated child sessions.
+
 ## Client-side unread persistence (sidebar layer)
 
 The sidebar unread dot is backed by two client-side stores in `static/sessions.js`.
