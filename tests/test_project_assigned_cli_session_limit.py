@@ -2355,24 +2355,21 @@ def test_unassigned_refill_cannot_clobber_a_resolved_assignment(
 
 
 def test_background_source_exclusion_literal_matches_the_constant():
-    """The interactive exclusion stays spelled as a tuple literal.
+    """Default loading excludes background chips and internal tool workers.
 
-    ``tests/test_issue2841_show_cron_sessions_toggle.py`` reads that call site as
-    SOURCE TEXT (``'("cron", "webhook", "kanban", "oneshot") if source_filter is None'``),
-    so replacing the literal with ``INTERACTIVE_WINDOW_EXCLUDED_CLI_SOURCES``
-    turned a pre-existing test red. The literal is therefore kept, and this test
-    pins it to the constant the new code paths use so the two cannot drift apart.
+    Tool workers are excluded from both the bounded interactive window and
+    assigned recovery; one-shot project recovery remains available.
     """
     from pathlib import Path
 
     source = Path(models.__file__).read_text(encoding="utf-8")
-    excluded = models.INTERACTIVE_WINDOW_EXCLUDED_CLI_SOURCES
+    excluded = (*models.INTERACTIVE_WINDOW_EXCLUDED_CLI_SOURCES, "tool")
     literal = ", ".join(f'"{name}"' for name in excluded)
     assert f"exclude_sources=({literal}) if source_filter is None else None" in source, (
         "the interactive exclude_sources literal must list exactly "
-        f"INTERACTIVE_WINDOW_EXCLUDED_CLI_SOURCES ({excluded!r})"
+        f"INTERACTIVE_WINDOW_EXCLUDED_CLI_SOURCES plus tool ({excluded!r})"
     )
-    assert '("cron", "webhook", "kanban", "oneshot") if source_filter is None' in source, (
+    assert '("cron", "webhook", "kanban", "oneshot", "tool") if source_filter is None' in source, (
         "test_issue2841_show_cron_sessions_toggle.py pins this exact substring"
     )
 
