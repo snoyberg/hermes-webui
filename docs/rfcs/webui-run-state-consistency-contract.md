@@ -621,6 +621,16 @@ shifts (#5513, #5542).
     That provenance is maintenance, never user activity (invariant 4), and an
     intentional delete must not be resurrected by orphan-backup recovery.
 
+## Sidebar notification ownership
+
+A conversation row's notification indicator reflects only that conversation's
+own running, unread-completion, or approval/clarification state. Nested child
+sessions (including attached forks) must not light the parent's dot, hide its
+timestamp, or add unread/attention styling to it. Child state remains available
+on expanded child rows; rendering the parent does not acknowledge its children.
+Child activity may still affect sidebar ordering. Compression-lineage segments
+remain one logical conversation and are not delegated child sessions.
+
 ## Client-side unread persistence (sidebar layer)
 
 The sidebar unread dot is backed by two client-side stores in `static/sessions.js`.
