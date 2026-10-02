@@ -8964,15 +8964,16 @@ function renderSessionListFromCache(){
     // Reference-only archived children contribute state without becoming navigable rows.
     if(childCount>0||hasChildState){
       const childCountEl=document.createElement('span');
-      childCountEl.className='session-child-count';
-      const childLabel=childCount>0?t('session_meta_children', childCount):'Child sessions';
+      childCountEl.className='session-child-count'
+        +(childAttention&&childAttention.kind==='approval'?' is-attention-approval':(childAttention&&childAttention.kind==='clarify'?' is-attention-clarify':''));
+      const childLabel=childCount>0?t('session_meta_children', childCount):t('session_child_archived');
       childCountEl.textContent=childLabel;
       const childBadgeTip=childCount>0?_sessionChildBadgeTooltip(childLabel):childLabel;
       childCountEl.title=childBadgeTip;
       if(hasChildState){
         const state=_createChildSessionStateIndicator(childState,'session-child-count-state');
         childCountEl.appendChild(state);
-        childCountEl.title=`${childBadgeTip} — ${state.title}`;
+        childCountEl.title=`${state.title} · ${childBadgeTip}`;
       }
       ['pointerdown','pointerup','click'].forEach(ev=>childCountEl.addEventListener(ev,e=>e.stopPropagation()));
       if(childCount>0){
