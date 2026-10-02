@@ -5716,7 +5716,8 @@ main.main > #mainPlugin{display:none;}
 .session-child-count{display:inline-flex;align-items:center;justify-content:center;height:16px;font-size:10px;font-weight:600;padding:0 6px;border-radius:999px;background:rgba(99,179,237,.16);color:#63b3ed;margin-left:6px;flex-shrink:0;user-select:none;cursor:pointer;}
 .session-child-count:hover{background:rgba(99,179,237,.26);color:#90cdf4;}
 .session-child-count{gap:5px;}
-.session-child-count:not([role="button"]){cursor:default;}
+.session-child-count:not([role="button"]){cursor:default;flex-shrink:1;min-width:0;}
+.session-child-count-label{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
 .session-child-count:focus-visible{outline:2px solid var(--accent);outline-offset:2px;}
 /* Kaladin preference: no aggregate dots or blocking tint; inspect expanded rows. */
 .session-child-count .session-child-count-state{display:none;}
