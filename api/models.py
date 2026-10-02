@@ -7663,8 +7663,16 @@ def new_session(workspace=None, model=None, profile=None, model_provider=None, p
         s.save()
     return s
 
+def _is_internal_tool_sidebar_session(session: dict) -> bool:
+    """Identify standalone internal workers, not native subagent children."""
+    source = session.get('raw_source') or session.get('source') or session.get('source_tag')
+    return str(source or '').strip().lower() == 'tool'
+
+
 def _hide_from_default_sidebar(session: dict, *, show_cron: bool = False, show_webhook: bool = False, show_kanban: bool = False) -> bool:
     """Return True for internal/background sessions hidden from the default list."""
+    if _is_internal_tool_sidebar_session(session):
+        return True
     sid = str(session.get('session_id') or '')
     source = (
         session.get('source_tag')
@@ -7754,7 +7762,7 @@ def _include_project_hidden_background_sidebar_sessions(
         sid = str(session.get('session_id') or '')
         if not sid or sid in visible_ids:
             continue
-        if not _is_intentionally_background_sidebar_session(session):
+        if _is_internal_tool_sidebar_session(session) or not _is_intentionally_background_sidebar_session(session):
             continue
         if not session.get('project_id'):
             continue
@@ -7800,7 +7808,7 @@ def _preserve_messageful_sidebar_discoverability(
             continue
         if _sidebar_message_count(session) <= 0:
             continue
-        if _is_intentionally_background_sidebar_session(session):
+        if _is_intentionally_background_sidebar_session(session) or _is_internal_tool_sidebar_session(session):
             continue
         root = _sidebar_lineage_root_id(session, sessions_by_id)
         if root in covered_roots:
@@ -8999,7 +9007,7 @@ def _apply_sidebar_state_db_override_rows(
         state_db_active_message_count = entry.pop('_state_db_active_message_count', None)
         state_db_last_message_at = entry.pop('_state_db_last_message_at', None)
         state_db_display_title = entry.pop('_state_db_display_title', None)
-        if state_db_source in ('webui', 'subagent'):
+        if state_db_source in ('webui', 'subagent', 'tool'):
             session['source_tag'] = state_db_source_tag
             session['raw_source'] = state_db_raw_source
             session['session_source'] = state_db_session_source
@@ -9466,12 +9474,12 @@ def all_sessions(
                 and not s.get('has_pending_user_message')
                 and not s.get('worktree_path')
             )]
+            _diag_stage(diag, "all_sessions.state_db_overrides")
+            _apply_sidebar_state_db_overrides(result)
             if include_lineage_metadata:
                 _diag_stage(diag, "all_sessions.lineage_metadata")
                 _enrich_sidebar_lineage_metadata(result)
             else:
-                _diag_stage(diag, "all_sessions.state_db_overrides")
-                _apply_sidebar_state_db_overrides(result)
                 _diag_stage(diag, "all_sessions.lineage_metadata_skipped")
             result = _prefer_fuller_snapshots_for_sidebar(result)
             sidebar_candidates = result
@@ -9528,12 +9536,12 @@ def all_sessions(
         and not s.pending_user_message
         and not getattr(s, 'worktree_path', None)
     )]  # fmt: skip
+    _diag_stage(diag, "all_sessions.state_db_overrides")
+    _apply_sidebar_state_db_overrides(result)
     if include_lineage_metadata:
         _diag_stage(diag, "all_sessions.lineage_metadata")
         _enrich_sidebar_lineage_metadata(result)
     else:
-        _diag_stage(diag, "all_sessions.state_db_overrides")
-        _apply_sidebar_state_db_overrides(result)
         _diag_stage(diag, "all_sessions.lineage_metadata_skipped")
     result = _prefer_fuller_snapshots_for_sidebar(result)
     sidebar_candidates = result
@@ -11198,7 +11206,7 @@ def _load_cli_sessions_uncached(
         # a one-shot run filed under a project stays reachable from its chip.
         # The unassigned refill skips one-shot and tool runs too: refilling the
         # window with them would undo #8265.
-        interactive_excluded = BACKGROUND_CLI_SOURCES
+        interactive_excluded = (*BACKGROUND_CLI_SOURCES, "tool")
         unassigned_refill_excluded = INTERACTIVE_WINDOW_EXCLUDED_CLI_SOURCES
         first_pass_count = len(state_rows)
         represented_rows: dict[str, dict] = {}
