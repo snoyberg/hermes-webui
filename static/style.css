@@ -5718,7 +5718,8 @@ main.main > #mainPlugin{display:none;}
 .session-child-count{gap:5px;}
 .session-child-count:not([role="button"]){cursor:default;}
 .session-child-count:focus-visible{outline:2px solid var(--accent);outline-offset:2px;}
-.session-child-count-state{width:10px;height:10px;}
+/* Kaladin preference: child activity is inspected explicitly via expanded rows. */
+.session-child-count .session-child-count-state{display:none;}
 .session-child-session-delegated{display:flex;align-items:center;gap:4px;min-width:0;}
 .session-child-session-label{flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;}
 .session-child-session-delegated.streaming .session-child-session-label{color:var(--accent);}
