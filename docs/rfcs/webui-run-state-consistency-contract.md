@@ -93,6 +93,26 @@ parent's workspace binding. Clients without this handling must reload the
 session before retrying. Server wakeups, regeneration semantics and Gateway
 routing are not silently retargeted by this recovery path.
 
+## Internal standalone worker visibility
+
+The Agent database's `source` owns session provenance. Sessions with
+`source=tool` are internal standalone workers, not human CLI conversations or
+native `source=subagent` children. Ordinary CLI/session-list projections and the
+Gateway watcher's projection and cheap change fingerprint exclude tool rows.
+Tool-only message/title churn must not invalidate the ordinary session list.
+
+When old imported WebUI sidecars disagree, the read-only state.db metadata
+projection overrides their source classification before sidebar filtering.
+Neither project-assignment recovery nor messageful/compression-lineage rescue
+may reinsert a tool worker. Human CLI rows and native nested children retain
+their existing visibility rules. Background-session display toggles do not
+expose tool workers.
+
+This is presentation filtering, not deletion or an access-control boundary.
+Transcripts and session IDs remain stored, direct session loading remains
+available, and an explicit CLI `source_filter=tool` (or low-level source query)
+can inspect workers for diagnostics. No new runner or adapter boundary is used.
+
 ## Goals
 
 - Define the state layers involved in active and recovered WebUI turns.
