@@ -5,8 +5,8 @@ sessions "that should not appear in user session lists", and its own
 `hermes sessions list` hides them. A script that drives `hermes chat --oneshot
 --source tool` per batch can create well over a thousand of them, which pushed
 Desktop/TUI/CLI conversations out of the 20-row window the same way one-shot
-runs did in #8265. They follow the one-shot treatment: out of the window and
-its unassigned refill, still reachable from a project chip and by id.
+runs did in #8265. Tool workers stay out of ordinary lists, including project
+recovery, while explicit source-filtered diagnostics and by-id access remain available.
 """
 
 import time
@@ -76,16 +76,26 @@ def _tool_rows(count, *, oldest_project_id=None):
     return rows
 
 
-def test_project_assigned_tool_session_is_recovered(fake_hermes_home, tmp_path):
-    # A user who filed tool sessions under a project by hand keeps seeing them.
+def test_project_assigned_tool_session_requires_explicit_diagnostics(fake_hermes_home, tmp_path):
+    # Project assignment does not turn an internal worker into a human session.
     _register_projects(tmp_path, "project-1")
     count = models.CLI_VISIBLE_SESSION_LIMIT + 1
     _write_state_db(fake_hermes_home / "state.db", _tool_rows(count, oldest_project_id="project-1"))
 
     by_id = {row["session_id"]: row for row in models.get_cli_sessions()}
-    assert by_id["tool-000"]["project_id"] == "project-1"
-    assert not any(sid.startswith("tool-") and sid != "tool-000" for sid in by_id)
+    assert not any(sid.startswith("tool-") for sid in by_id)
     assert {"desk-0", "desk-1", "desk-2"} <= set(by_id)
+    # The bounded source-filtered window still lists workers; the unbounded
+    # diagnostic reader and direct ID lookup retain this older assigned worker.
+    diagnostic = models.get_cli_sessions(source_filter="tool")
+    assert diagnostic and all(row["raw_source"] == "tool" for row in diagnostic)
+    from api.agent_sessions import read_importable_agent_session_rows
+    all_workers = {row["id"]: row for row in read_importable_agent_session_rows(
+        fake_hermes_home / "state.db", limit=None,
+        include_sources=("tool",), exclude_sources=None,
+    )}
+    assert all_workers["tool-000"]["project_id"] == "project-1"
+    assert models.get_cli_session_by_id("tool-000", "tool")["project_id"] == "project-1"
 
 
 def test_opened_tool_session_resolves_by_id(fake_hermes_home):
