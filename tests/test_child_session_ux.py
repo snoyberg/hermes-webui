@@ -54,7 +54,10 @@ def test_reference_only_chip_localized_static_archived_label(state):
     for row in render(state, reference=True):
         chip = row["chip"]
         assert row.get("archived"), row["locale"]
-        assert chip["textContent"] == row["archived"]
+        label, indicator = chip["children"]
+        assert label["className"] == "session-child-count-label"
+        assert label["textContent"] == row["archived"]
+        assert "session-child-count-state" in indicator["className"].split()
         assert chip["title"].endswith(" · " + row["archived"])
         assert "role" not in chip["attributes"] and "tabindex" not in chip["attributes"]
         assert "click" not in chip["title"].lower()
