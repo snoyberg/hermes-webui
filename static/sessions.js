@@ -8962,7 +8962,13 @@ function renderSessionListFromCache(){
       childCountEl.className='session-child-count'
         +(childAttention&&childAttention.kind==='approval'?' is-attention-approval':(childAttention&&childAttention.kind==='clarify'?' is-attention-clarify':''));
       const childLabel=childCount>0?t('session_meta_children', childCount):t('session_child_archived');
-      childCountEl.textContent=childLabel;
+      if(childCount>0) childCountEl.textContent=childLabel;
+      else {
+        const label=document.createElement('span');
+        label.className='session-child-count-label';
+        label.textContent=childLabel;
+        childCountEl.appendChild(label);
+      }
       const childBadgeTip=childCount>0?_sessionChildBadgeTooltip(childLabel):childLabel;
       childCountEl.title=childBadgeTip;
       if(hasChildState){
