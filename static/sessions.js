@@ -7650,6 +7650,16 @@ function _sessionStateTooltip({isStreaming=false,hasUnread=false}={}){
   return '';
 }
 
+function _createChildSessionStateIndicator({isStreaming=false,hasUnread=false,attention=null}, className){
+  const state=document.createElement('span');
+  const attentionClass=attention?(attention.kind==='approval'?' is-attention-approval':(attention.kind==='clarify'?' is-attention-clarify':' is-attention-generic')):'';
+  state.className='session-state-indicator '+className
+    +(attention?attentionClass:(isStreaming?' is-streaming':(hasUnread?' is-unread':'')));
+  state.setAttribute('aria-hidden','true');
+  state.title=attention?attention.title:_sessionStateTooltip({isStreaming,hasUnread});
+  return state;
+}
+
 function _attachChildSessionsToSidebarRows(collapsedRows, rawSessions, rawReferenceSessions){
   const referenceSessions=Array.isArray(rawReferenceSessions)?rawReferenceSessions:(rawSessions||[]);
   const sessionIdsInList=new Set(referenceSessions.map(s=>s&&s.session_id).filter(Boolean));
@@ -8948,20 +8958,40 @@ function renderSessionListFromCache(){
       titleRow.appendChild(segmentCountEl);
     }
     const childCount=typeof s._child_session_count==='number'?s._child_session_count:(Array.isArray(s._child_sessions)?s._child_sessions.length:0);
-    if(childCount>0){
+    const childAttention=_sessionAttentionState({attention:s._child_session_attention});
+    const childState={isStreaming:!!s._child_session_streaming,hasUnread:!!s._child_session_has_unread,attention:childAttention};
+    const hasChildState=childState.isStreaming||childState.hasUnread||!!childAttention;
+    // Reference-only archived children contribute state without becoming navigable rows.
+    if(childCount>0||hasChildState){
       const childCountEl=document.createElement('span');
       childCountEl.className='session-child-count';
-      const childLabel=t('session_meta_children', childCount);
+      const childLabel=childCount>0?t('session_meta_children', childCount):'Child sessions';
       childCountEl.textContent=childLabel;
-      childCountEl.title=_sessionChildBadgeTooltip(childLabel);
+      const childBadgeTip=childCount>0?_sessionChildBadgeTooltip(childLabel):childLabel;
+      childCountEl.title=childBadgeTip;
+      if(hasChildState){
+        const state=_createChildSessionStateIndicator(childState,'session-child-count-state');
+        childCountEl.appendChild(state);
+        childCountEl.title=`${childBadgeTip} — ${state.title}`;
+      }
       ['pointerdown','pointerup','click'].forEach(ev=>childCountEl.addEventListener(ev,e=>e.stopPropagation()));
-      childCountEl.onclick=(e)=>{
-        e.stopPropagation();
-        const key=_sidebarLineageKeyForRow(s);
-        if(_expandedChildSessionKeys.has(key)) _expandedChildSessionKeys.delete(key);
-        else _expandedChildSessionKeys.add(key);
-        renderSessionListFromCache();
-      };
+      if(childCount>0){
+        childCountEl.setAttribute('role','button');
+        childCountEl.setAttribute('tabindex','0');
+        childCountEl.setAttribute('aria-expanded',_expandedChildSessionKeys.has(lineageKey)?'true':'false');
+        childCountEl.setAttribute('aria-label',childCountEl.title);
+        const toggleChildren=(e)=>{
+          e.preventDefault();
+          e.stopPropagation();
+          if(_expandedChildSessionKeys.has(lineageKey)) _expandedChildSessionKeys.delete(lineageKey);
+          else _expandedChildSessionKeys.add(lineageKey);
+          renderSessionListFromCache();
+        };
+        childCountEl.onclick=toggleChildren;
+        childCountEl.onkeydown=(e)=>{
+          if(e.key==='Enter'||e.key===' ') toggleChildren(e);
+        };
+      }
       titleRow.appendChild(childCountEl);
     }
     if(s.is_cli_session||_isMessagingSession(s)){
@@ -9221,19 +9251,16 @@ function renderSessionListFromCache(){
         };
       };
       for(const child of sortedChildren){
+        const childIsActive=!!(activeSidForSidebar&&child.session_id===activeSidForSidebar);
+        const childStreaming=_isSessionEffectivelyStreaming(child);
+        const childHasUnread=_hasUnreadForSession(child)&&!childIsActive;
+        const childAttention=_sessionAttentionState(child);
+        const childAttentionClass=childAttention?(childAttention.kind==='approval'?' attention-approval':(childAttention.kind==='clarify'?' attention-clarify':' attention-attention')):'';
+        const childStateClasses=(childIsActive?' active':'')+(childStreaming?' streaming':'')+(childHasUnread?' unread':'')+(childAttention?' needs-attention':'')+childAttentionClass;
+        const makeChildState=()=>_createChildSessionStateIndicator({isStreaming:childStreaming,hasUnread:childHasUnread,attention:childAttention},'session-child-session-state');
         if(child.session_source==='fork'){
-          const childIsActive=!!(activeSidForSidebar&&child.session_id===activeSidForSidebar);
-          const childStreaming=_isSessionEffectivelyStreaming(child);
-          const childHasUnread=_hasUnreadForSession(child)&&!childIsActive;
-          const childAttention=_sessionAttentionState(child);
-          const childAttentionClass=childAttention?(childAttention.kind==='approval'?' attention-approval':(childAttention.kind==='clarify'?' attention-clarify':' attention-attention')):'';
           const row=document.createElement('div');
-          row.className='session-child-session session-child-session-fork'
-            +(childIsActive?' active':'')
-            +(childStreaming?' streaming':'')
-            +(childHasUnread?' unread':'')
-            +(childAttention?' needs-attention':'')
-            +childAttentionClass;
+          row.className='session-child-session session-child-session-fork'+childStateClasses;
           row.dataset.sid=child.session_id;
           if(_sessionSelectMode&&!_isReadOnlySession(child)){
             const cbW=document.createElement('label');cbW.className='session-select-cb-wrapper';
@@ -9267,16 +9294,7 @@ function renderSessionListFromCache(){
             mainBtn.textContent=childLabelFor(child);
           });
           row.appendChild(mainBtn);
-          const state=document.createElement('span');
-          state.className='session-state-indicator session-child-session-state'
-            +(childStreaming?' is-streaming':'')
-            +(childHasUnread?' is-unread':'')
-            +(childAttention?(childAttention.kind==='approval'?' is-attention-approval':(childAttention.kind==='clarify'?' is-attention-clarify':' is-attention-generic')):'');
-          state.setAttribute('aria-hidden','true');
-          const childStateTip=_sessionStateTooltip({isStreaming:childStreaming,hasUnread:childHasUnread});
-          if(childAttention&&childAttention.title) state.title=childAttention.title;
-          else if(childStateTip) state.title=childStateTip;
-          row.appendChild(state);
+          row.appendChild(makeChildState());
           const readOnlyChild=_isReadOnlySession(child);
           let actions=null;
           if(!readOnlyChild){
@@ -9318,9 +9336,15 @@ function renderSessionListFromCache(){
         }
         const row=document.createElement('button');
         row.type='button';
-        row.className='session-child-session'+(activeSidForSidebar&&child.session_id===activeSidForSidebar?' active':'');
-        row.textContent=childLabelFor(child);
-        row.title='Open child session';
+        row.className='session-child-session session-child-session-delegated'+childStateClasses;
+        row.dataset.sid=child.session_id;
+        const label=document.createElement('span');
+        label.className='session-child-session-label';
+        label.textContent=childLabelFor(child);
+        row.appendChild(label);
+        const state=makeChildState();
+        row.appendChild(state);
+        row.title=state.title?`Open child session — ${state.title}`:'Open child session';
         row.onclick=async(e)=>{
           e.stopPropagation();
           await openChildSession(child);
