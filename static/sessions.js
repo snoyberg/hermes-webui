@@ -8802,11 +8802,12 @@ function renderSessionListFromCache(){
     const el=document.createElement('div');
     const isActive=_sessionLineageContainsSession(s,activeSidForSidebar);
     const ownStreaming=_isSessionEffectivelyStreaming(s);
-    const isStreaming=ownStreaming||!!s._child_session_streaming;
+    // The row's indicator belongs to this conversation, not its nested children.
+    const isStreaming=ownStreaming;
     _rememberRenderedStreamingState(s, ownStreaming);
     _rememberRenderedSessionSnapshot(s);
-    const hasUnread=(_hasUnreadForSession(s)||!!s._child_session_has_unread)&&!isActive;
-    const attention=_sessionAttentionState(s)||_sessionAttentionState({_child:true,attention:s._child_session_attention});
+    const hasUnread=_hasUnreadForSession(s)&&!isActive;
+    const attention=_sessionAttentionState(s);
     const attentionClass=attention?(attention.kind==='approval'?' attention-approval':(attention.kind==='clarify'?' attention-clarify':' attention-attention')):'';
     const readOnly=_isReadOnlySession(s);
     el.className='session-item'+(isActive?' active':'')+(isActive&&S.session&&S.session._flash?' new-flash':'')+(s.archived?' archived':'')+(ownStreaming?' streaming':'')+(hasUnread?' unread':'')+(attention?' needs-attention':'')+attentionClass;
