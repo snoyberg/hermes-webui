@@ -5927,8 +5927,16 @@ def new_session(workspace=None, model=None, profile=None, model_provider=None, p
         s.save()
     return s
 
+def _is_internal_tool_sidebar_session(session: dict) -> bool:
+    """Identify standalone internal workers, not native subagent children."""
+    source = session.get('raw_source') or session.get('source') or session.get('source_tag')
+    return str(source or '').strip().lower() == 'tool'
+
+
 def _hide_from_default_sidebar(session: dict, *, show_cron: bool = False, show_webhook: bool = False, show_kanban: bool = False) -> bool:
     """Return True for internal/background sessions hidden from the default list."""
+    if _is_internal_tool_sidebar_session(session):
+        return True
     sid = str(session.get('session_id') or '')
     source = (
         session.get('source_tag')
@@ -6018,7 +6026,7 @@ def _include_project_hidden_background_sidebar_sessions(
         sid = str(session.get('session_id') or '')
         if not sid or sid in visible_ids:
             continue
-        if not _is_intentionally_background_sidebar_session(session):
+        if _is_internal_tool_sidebar_session(session) or not _is_intentionally_background_sidebar_session(session):
             continue
         if not session.get('project_id'):
             continue
@@ -6064,7 +6072,7 @@ def _preserve_messageful_sidebar_discoverability(
             continue
         if _sidebar_message_count(session) <= 0:
             continue
-        if _is_intentionally_background_sidebar_session(session):
+        if _is_intentionally_background_sidebar_session(session) or _is_internal_tool_sidebar_session(session):
             continue
         root = _sidebar_lineage_root_id(session, sessions_by_id)
         if root in covered_roots:
@@ -6979,7 +6987,7 @@ def _apply_sidebar_state_db_override_metadata(sessions: list[dict], metadata: di
         state_db_message_count = entry.pop('_state_db_message_count', None)
         state_db_last_message_at = entry.pop('_state_db_last_message_at', None)
         state_db_display_title = entry.pop('_state_db_display_title', None)
-        if state_db_source in ('webui', 'subagent'):
+        if state_db_source in ('webui', 'subagent', 'tool'):
             session['source_tag'] = state_db_source_tag
             session['raw_source'] = state_db_raw_source
             session['session_source'] = state_db_session_source
@@ -7241,12 +7249,12 @@ def all_sessions(
                 and not s.get('has_pending_user_message')
                 and not s.get('worktree_path')
             )]
+            _diag_stage(diag, "all_sessions.state_db_overrides")
+            _apply_sidebar_state_db_overrides(result)
             if include_lineage_metadata:
                 _diag_stage(diag, "all_sessions.lineage_metadata")
                 _enrich_sidebar_lineage_metadata(result)
             else:
-                _diag_stage(diag, "all_sessions.state_db_overrides")
-                _apply_sidebar_state_db_overrides(result)
                 _diag_stage(diag, "all_sessions.lineage_metadata_skipped")
             result = _prefer_fuller_snapshots_for_sidebar(result)
             sidebar_candidates = result
@@ -7303,12 +7311,12 @@ def all_sessions(
         and not s.pending_user_message
         and not getattr(s, 'worktree_path', None)
     )]  # fmt: skip
+    _diag_stage(diag, "all_sessions.state_db_overrides")
+    _apply_sidebar_state_db_overrides(result)
     if include_lineage_metadata:
         _diag_stage(diag, "all_sessions.lineage_metadata")
         _enrich_sidebar_lineage_metadata(result)
     else:
-        _diag_stage(diag, "all_sessions.state_db_overrides")
-        _apply_sidebar_state_db_overrides(result)
         _diag_stage(diag, "all_sessions.lineage_metadata_skipped")
     result = _prefer_fuller_snapshots_for_sidebar(result)
     sidebar_candidates = result
@@ -8708,10 +8716,9 @@ def _load_cli_sessions_uncached(
         # Background sources have independent bounded passes below. Keeping them
         # out of this 20-row interactive window prevents a busy worker source
         # (especially kanban) from evicting every CLI/TUI/ACP conversation.
-        # Spelled as a literal on purpose: tests/test_issue2841_show_cron_sessions_toggle.py
-        # reads this line as source text. Must stay equal to BACKGROUND_CLI_SOURCES
-        # (pinned by test_background_source_exclusion_literal_matches_the_constant).
-        exclude_sources=("cron", "webhook", "kanban") if source_filter is None else None,
+        # Default SQL exclusion includes background chips plus standalone workers.
+        # Keep it aligned with the interactive recovery pass below.
+        exclude_sources=("cron", "webhook", "kanban", "tool") if source_filter is None else None,
         include_sources=None if source_filter is None else (source_filter,),
     )
     if source_filter is None:
@@ -8724,7 +8731,7 @@ def _load_cli_sessions_uncached(
         #      owes to an unassigned conversation (#6659 review findings 1-2).
         # Both passes are keyed on the LOGICAL conversation (lineage), never the
         # raw row, so compression segments cannot consume either budget.
-        interactive_excluded = BACKGROUND_CLI_SOURCES
+        interactive_excluded = (*BACKGROUND_CLI_SOURCES, 'tool')
         first_pass_count = len(state_rows)
         represented_rows: dict[str, dict] = {}
 
