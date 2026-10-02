@@ -205,7 +205,7 @@
   :root[data-skin="graphite"] .session-item.active .session-title,
   :root[data-skin="graphite"] .session-item.active .session-meta,
   :root[data-skin="graphite"] .session-item.active .session-preview,
-  :root[data-skin="graphite"] .session-item.active *{color:inherit!important;}
+  :root[data-skin="graphite"] .session-item.active :not(:where(.session-child-count,.session-child-count-state,.session-child-session-state)){color:inherit!important;}
   :root[data-skin="graphite"] .composer-box{background:var(--surface)!important;border-color:var(--border2)!important;border-radius:14px!important;box-shadow:0 1px 2px rgba(0,0,0,0.07);}
   :root.dark[data-skin="graphite"] .composer-box{box-shadow:0 1px 2px rgba(0,0,0,0.28);}
   :root[data-skin="graphite"] .composer-box:focus-within{border-color:var(--accent)!important;box-shadow:0 0 0 2px var(--focus-ring)!important;}
@@ -331,7 +331,7 @@
   :root[data-skin="codex"] .session-item.active .session-title,
   :root[data-skin="codex"] .session-item.active .session-meta,
   :root[data-skin="codex"] .session-item.active .session-preview,
-  :root[data-skin="codex"] .session-item.active *{color:inherit!important;}
+  :root[data-skin="codex"] .session-item.active :not(:where(.session-child-count,.session-child-count-state,.session-child-session-state)){color:inherit!important;}
   :root[data-skin="codex"] .composer-box{background:var(--surface)!important;border-color:var(--border2)!important;border-radius:14px!important;box-shadow:0 1px 2px rgba(0,0,0,0.07);}
   :root.dark[data-skin="codex"] .composer-box{box-shadow:0 1px 2px rgba(0,0,0,0.28);}
   :root[data-skin="codex"] .composer-box:focus-within{border-color:var(--accent)!important;box-shadow:0 0 0 2px var(--focus-ring)!important;}
@@ -457,7 +457,7 @@
   :root[data-skin="terracotta"] .session-item.active .session-title,
   :root[data-skin="terracotta"] .session-item.active .session-meta,
   :root[data-skin="terracotta"] .session-item.active .session-preview,
-  :root[data-skin="terracotta"] .session-item.active *{color:inherit!important;}
+  :root[data-skin="terracotta"] .session-item.active :not(:where(.session-child-count,.session-child-count-state,.session-child-session-state)){color:inherit!important;}
   :root[data-skin="terracotta"] .composer-box{background:var(--surface)!important;border-color:var(--border2)!important;border-radius:14px!important;box-shadow:0 1px 2px rgba(0,0,0,0.07);}
   :root.dark[data-skin="terracotta"] .composer-box{box-shadow:0 1px 2px rgba(0,0,0,0.28);}
   :root[data-skin="terracotta"] .composer-box:focus-within{border-color:var(--accent)!important;box-shadow:0 0 0 2px var(--focus-ring)!important;}
@@ -583,7 +583,7 @@
   :root[data-skin="github"] .session-item.active .session-title,
   :root[data-skin="github"] .session-item.active .session-meta,
   :root[data-skin="github"] .session-item.active .session-preview,
-  :root[data-skin="github"] .session-item.active *{color:inherit!important;}
+  :root[data-skin="github"] .session-item.active :not(:where(.session-child-count,.session-child-count-state,.session-child-session-state)){color:inherit!important;}
   :root[data-skin="github"] .composer-box{background:var(--surface)!important;border-color:var(--border2)!important;border-radius:14px!important;box-shadow:0 1px 2px rgba(0,0,0,0.07);}
   :root.dark[data-skin="github"] .composer-box{box-shadow:0 1px 2px rgba(0,0,0,0.28);}
   :root[data-skin="github"] .composer-box:focus-within{border-color:var(--accent)!important;box-shadow:0 0 0 2px var(--focus-ring)!important;}
@@ -973,9 +973,9 @@
   :root[data-skin="geist-contrast"] .session-item.active .session-title,
   :root[data-skin="geist-contrast"] .session-item.active .session-meta,
   :root[data-skin="geist-contrast"] .session-item.active .session-preview,
-  :root[data-skin="geist-contrast"] .session-item.active *{color:inherit!important;}
+  :root[data-skin="geist-contrast"] .session-item.active :not(:where(.session-child-count,.session-child-count-state,.session-child-session-state)){color:inherit!important;}
   :root.dark[data-skin="geist-contrast"] .session-item.active,
-  :root.dark[data-skin="geist-contrast"] .session-item.active *{color:var(--text)!important;}
+  :root.dark[data-skin="geist-contrast"] .session-item.active :not(:where(.session-child-count,.session-child-count-state,.session-child-session-state)){color:var(--text)!important;}
   :root[data-skin="geist-contrast"] .nav-tab.active,
   :root[data-skin="geist-contrast"] .rail-btn.active{color:var(--accent-text)!important;}
   :root.dark[data-skin="geist-contrast"] .nav-tab.active svg,
@@ -5718,7 +5718,7 @@ main.main > #mainPlugin{display:none;}
 .session-child-count{gap:5px;}
 .session-child-count:not([role="button"]){cursor:default;}
 .session-child-count:focus-visible{outline:2px solid var(--accent);outline-offset:2px;}
-/* Kaladin preference: child activity is inspected explicitly via expanded rows. */
+/* Kaladin preference: no aggregate dots or blocking tint; inspect expanded rows. */
 .session-child-count .session-child-count-state{display:none;}
 .session-child-session-delegated{display:flex;align-items:center;gap:4px;min-width:0;}
 .session-child-session-label{flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;}
@@ -5736,7 +5736,10 @@ main.main > #mainPlugin{display:none;}
 .session-child-session-fork.streaming .session-child-session-main{color:var(--accent);}
 .session-child-session-fork .session-actions{position:static;transform:none;opacity:1;pointer-events:auto;flex:0 0 auto;}
 .session-child-session-fork .session-child-session-state{position:static;transform:none;flex:0 0 auto;width:14px;height:14px;margin-right:2px;}
-.session-child-session-state{color:var(--accent);}
+.session-child-session-state{width:14px;height:14px;color:var(--accent);}
+@media (max-width:768px), (pointer:coarse){
+  .session-child-session-delegated{min-height:44px;box-sizing:border-box;padding:8px 6px;}
+}
 .session-child-session-fork .session-actions-trigger{width:22px;height:22px;}
 .session-child-session-fork .session-swipe-affordance{top:1px;bottom:1px;}
 .session-child-session-fork .session-child-session-main,.session-child-session-fork .session-actions{z-index:1;}
