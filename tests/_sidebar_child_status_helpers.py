@@ -40,7 +40,8 @@ const ICONS={more:'...',pin:'P'};
 const opened=[];
 function t(key, value){
   if(key==='session_meta_children') return value+' children';
-  if(key==='session_child_toggle_hint') return value+' (click to expand/collapse)';
+  if(key==='session_child_toggle_hint') return value+' (click to show or hide)';
+  if(key==='session_child_archived') return 'Child sessions (archived)';
   if(key==='session_attention_approval_title') return 'Waiting for permission decision';
   if(key==='session_attention_clarify_title') return 'Waiting for your answer';
   if(key==='session_attention_generic_title') return 'Waiting for user action';
