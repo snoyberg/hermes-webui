@@ -304,6 +304,19 @@ hidden archived children navigable. Child activity may still affect sidebar
 ordering. Compression-lineage segments remain one logical conversation and are
 not delegated child sessions.
 
+Child-chip tooltips and accessible toggle labels lead with the aggregated state,
+followed by one separator and the localized child count/toggle hint. Approval
+and clarification tint the chip with semantic error/warning colors, including
+when its parent is active. Running and unread retain a plain status mark. A
+reference-only chip uses a localized archived label and is not an expander.
+Fork and delegated row indicators are both 14px; delegated navigation targets
+are at least 44px tall on narrow layouts or coarse pointers, while fine-pointer
+desktop rows remain compact.
+
+Kaladin presentation override: aggregated child marks and blocking chip tints
+are suppressed. The child count, localized tooltip, and expanded per-child
+indicators remain available for deliberate inspection.
+
 ## Client-side unread persistence (sidebar layer)
 
 The sidebar unread dot is backed by two client-side stores in `static/sessions.js`.
