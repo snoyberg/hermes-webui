@@ -26,6 +26,16 @@
 
 ### Performance
 
+- **New Chat, Cmd/Ctrl+K and `/new` focus the composer without waiting for a second session-list read.**
+  `newSession()` already refreshes the sidebar (now forced, so the new row paints even while the pointer is over
+  the list), but each caller also awaited its own `renderSessionList()` before focusing. That queued a second full
+  `/api/sessions` + `/api/projects` read in front of the cursor, which held the composer for seconds on a long
+  session list. The button, the shortcut, `/new`, and the no-session branches of `/terminal` and `/goal` now rely on
+  `newSession()`'s refresh. (#7992, #7998 by @ybai08; #7936, #7996)
+- **Switching profiles keeps the skill-count cache.** `switch_profile()` used to clear every profile's cached skill
+  counts, so the next profile list re-parsed every profile's `SKILL.md` tree. Counts are keyed per profile directory,
+  so the cache now survives a switch; the mtime probe and 300 s TTL still catch real changes, and the active-org
+  marker is stored inside the cache entry so a marker change recomputes. (#7972 by @ybai08, part of #7940)
 - **The all-profiles session list no longer computes every profile's skill counts.** Listing
   sessions across all profiles (`/api/sessions?all_profiles=1`) called the profile-picker builder
   only to learn the profile names, which also counted every profile's skills. It now adds the
