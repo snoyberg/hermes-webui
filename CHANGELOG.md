@@ -84,6 +84,12 @@
 
 ### Fixed
 
+- **A Gateway turn that spans a WebUI restart streams again after the tab reattaches.** #7785 reattached such
+  runs, but the reopened tab showed only a spinner until the run ended, and only the final answer text was saved:
+  the reattach worker polled `GET /v1/runs/{id}` and never subscribed to `/v1/runs/{id}/events`. It now restores
+  what the run journal already holds, resumes the Gateway event stream after the last journaled sequence (so
+  nothing is replayed twice), and saves reasoning and tool activity with the Gateway's authoritative final output.
+  If the journal can't be read it stays poll-only instead of replaying the whole run. (#7878 by @carlotestor)
 - **Clarify questions work with Agents that pass the batch as `questions=`.** Some Hermes Agent builds call the
   WebUI clarify callback as `callback("", None, questions=[...])` instead of `callback([...])`. The adapter only
   recognised the positional form, so it showed an empty single question and returned a plain string the Agent
