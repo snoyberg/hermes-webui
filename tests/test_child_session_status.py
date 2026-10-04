@@ -20,8 +20,9 @@ def session(sid, state="idle", **extra):
     return row
 
 
-def run_component(raw, references, expanded, active):
-    script = FAKE_DOM + component_script() + f"""
+def run_component(raw, references, expanded, active, search=""):
+    component = component_script().replace("searchQueryRaw=''", f"searchQueryRaw={json.dumps(search)}")
+    script = FAKE_DOM + component + f"""
 const raw={json.dumps(raw)}, refs={json.dumps(references)};
 const before=JSON.stringify([raw,refs]);
 const result=renderFixture(raw,refs,{json.dumps(expanded)},{json.dumps(active)});
@@ -37,6 +38,7 @@ const children=nodes.filter(e=>(e.className||'').split(' ').includes('session-ch
     parent:result.element.className,
     time:nodes.find(e=>(e.className||'').startsWith('session-time')),
     dot:result.element.children.find(e=>(e.className||'').includes('session-attention-indicator')),
+    activity:nodes.filter(e=>(e.className||'').split(' ').includes('session-child-activity-indicator')),
     chip:chip||null,children,opened,row:result.row,unchanged:before===JSON.stringify([raw,refs])
   }}));
 }})();
@@ -81,6 +83,8 @@ def test_child_status_attach_and_render_matrix(kind, state, expanded, active):
         assert out["chip"]["title"] != "1 children (click to expand/collapse)"
     else:
         assert not chip_states
+    # Notification ownership is unchanged; collapsed child activity is separate.
+    assert len(out["activity"]) == int(state == "streaming" and not expanded)
     assert not any(c in out["parent"].split() for c in ("streaming", "unread", "needs-attention"))
     assert "is-hidden" not in out["time"]["className"]
     assert not any(c.startswith("is-") for c in out["dot"]["className"].split())
