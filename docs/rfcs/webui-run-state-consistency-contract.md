@@ -292,8 +292,15 @@ and 5; it does not mark every run-state boundary implemented.
 
 A conversation row's notification indicator reflects only that conversation's
 own running, unread-completion, or approval/clarification state. Nested child
-sessions (including attached forks) must not light the parent's dot, hide its
-timestamp, or add unread/attention styling to it. A separate status mark on the
+sessions (including attached forks) must not light the parent's notification dot,
+hide its timestamp, or add unread/attention styling to it. Activity is distinct
+from notification: when children are collapsed and any child is running, a
+separate spinner on the parent's title row exposes that work without replacing
+its own unread or attention cue. Expanded children show activity on their own
+rows; the parent's own running spinner remains regardless of expansion. A
+reference-only archived child with no expandable rows is treated as collapsed.
+The activity projection clears when child work settles and does not acknowledge
+anything. A separate status mark on the
 child-count chip exposes aggregated child state even while collapsed, including
 reference-only archived children. Approval takes precedence over clarification,
 then other attention, running, and unread completion. Expanded fork and delegated
