@@ -8961,6 +8961,13 @@ function renderSessionListFromCache(){
     const childAttention=_sessionAttentionState({attention:s._child_session_attention});
     const childState={isStreaming:!!s._child_session_streaming,hasUnread:!!s._child_session_has_unread,attention:childAttention};
     const hasChildState=childState.isStreaming||childState.hasUnread||!!childAttention;
+    const childrenExpanded=childCount>0&&Array.isArray(s._child_sessions)&&(_expandedChildSessionKeys.has(lineageKey)||!!searchQueryRaw);
+    // Activity is separate from the parent's own notification. Keep both visible
+    // when the parent needs attention; an archived-only chip cannot be expanded.
+    if(childState.isStreaming&&!childrenExpanded&&!ownStreaming){
+      titleRow.appendChild(_createChildSessionStateIndicator(
+        {isStreaming:true},'session-child-activity-indicator'));
+    }
     // Reference-only archived children contribute state without becoming navigable rows.
     if(childCount>0||hasChildState){
       const childCountEl=document.createElement('span');
@@ -9059,7 +9066,7 @@ function renderSessionListFromCache(){
       }
       sessionText.appendChild(lineageList);
     }
-    if(childCount>0&&Array.isArray(s._child_sessions)&&(_expandedChildSessionKeys.has(lineageKey)||!!searchQueryRaw)){
+    if(childrenExpanded){
       const childList=document.createElement('div');
       childList.className='session-child-sessions';
       ['pointerdown','pointerup','click','touchstart','touchmove','touchend','touchcancel'].forEach(ev=>childList.addEventListener(ev,e=>e.stopPropagation()));
