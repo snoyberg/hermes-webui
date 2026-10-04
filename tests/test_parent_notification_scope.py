@@ -1,4 +1,4 @@
-"""A conversation's sidebar indicator must not inherit child notifications."""
+"""Parent notifications stay own-scoped; collapsed child activity is separate."""
 import json
 import shutil
 import subprocess
