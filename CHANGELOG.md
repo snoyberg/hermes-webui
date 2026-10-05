@@ -105,6 +105,12 @@
 
 ### Fixed
 
+- **Chat no longer reports a stale Agent runtime just because Git is slow.** Under load, one of the Agent revision
+  check's three Git reads could exceed its 2-second limit, so chat start failed with `agent_runtime_stale` even though
+  the Agent was current. The check now gets one 10-second budget across all three reads (each read is given only the
+  time remaining, and a read that finishes after the deadline is ignored), so a slow but working checkout passes
+  while a stale, unreadable or hung one still blocks chat. Thanks @matthewlush1. (#7920 by @matthewlush1)
+
 - **Thinking cards stay on the step that produced them after a reload.** With adaptive-thinking models in long
   agentic turns, settlement let a drifted stream segment override the reasoning the Agent had already saved on each
   step, so after a reload a trace could show up a step early, twice, or on a step that never thought (one real
