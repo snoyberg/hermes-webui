@@ -32,6 +32,12 @@
   `/api/sessions` + `/api/projects` read in front of the cursor, which held the composer for seconds on a long
   session list. The button, the shortcut, `/new`, and the no-session branches of `/terminal` and `/goal` now rely on
   `newSession()`'s refresh. (#7992, #7998 by @ybai08; #7936, #7996)
+- **The first message from an empty composer is sent without waiting for a second session-list read.** With no
+  conversation open, `send()` created the session and then awaited its own `renderSessionList()` before
+  `POST /api/chat/start`, so on a long session list the first message sat behind a full `/api/sessions` +
+  `/api/projects` read. All nine no-session branches of `send()` (the ordinary send path and the slash commands) now
+  rely on `newSession()`'s forced refresh; the new row still appears, becomes active and shows it is streaming.
+  (#8013 by @ybai08, fixes #8004)
 - **Switching profiles keeps the skill-count cache.** `switch_profile()` used to clear every profile's cached skill
   counts, so the next profile list re-parsed every profile's `SKILL.md` tree. Counts are keyed per profile directory,
   so the cache now survives a switch; the mtime probe and 300 s TTL still catch real changes, and the active-org
@@ -98,6 +104,14 @@
   @laitekin. (#7297, fixes #7294)
 
 ### Fixed
+
+- **Thinking cards stay on the step that produced them after a reload.** With adaptive-thinking models in long
+  agentic turns, settlement let a drifted stream segment override the reasoning the Agent had already saved on each
+  step, so after a reload a trace could show up a step early, twice, or on a step that never thought (one real
+  session had 1,185 of 3,576 steps misattributed). The Agent's own `reasoning` on a step, including an explicit
+  none, now wins. When a runtime doesn't set it, each streamed segment is bound to the step that produced it (tool-call
+  starts and interim commentary, including Codex Responses commentary kept in `codex_message_items`), and Agents too old
+  to report tool starts keep positional settlement. (#7788 by @carlotestor)
 
 - **Colon-tagged Custom models route correctly when the default provider is Ollama, local or vLLM.** With
   `model.provider: ollama` (or another alias of the custom endpoint) plus a `base_url`, picking a Custom-group model
