@@ -99,6 +99,13 @@
 
 ### Fixed
 
+- **Colon-tagged Custom models route correctly when the default provider is Ollama, local or vLLM.** With
+  `model.provider: ollama` (or another alias of the custom endpoint) plus a `base_url`, picking a Custom-group model
+  whose id carries a tag such as `qwen3.8:27b` failed with "custom:qwen3.8 not configured": the tag's colon was read as
+  a provider separator. Such picks now keep the model id bare and route to the configured endpoint with its key, and a
+  named provider (including one literally called `custom-configured`) keeps its own endpoint and key.
+  (#7966 by @ybai08, fixes #7955)
+
 - **Sidebar and workspace-panel resizing no longer gets stuck, and date-group collapse survives bad saved state.**
   Dragging a resize handle and then losing the window (a blur, a lost pointer, a release outside the page) could leave
   the drag running so the panel kept following the cursor; the handles now use pointer capture with a fallback that
