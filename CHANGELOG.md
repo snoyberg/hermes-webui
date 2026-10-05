@@ -99,6 +99,13 @@
 
 ### Fixed
 
+- **Sidebar and workspace-panel resizing no longer gets stuck, and date-group collapse survives bad saved state.**
+  Dragging a resize handle and then losing the window (a blur, a lost pointer, a release outside the page) could leave
+  the drag running so the panel kept following the cursor; the handles now use pointer capture with a fallback that
+  ends the drag on blur or cancel. A corrupted saved collapse state (for example a stored `null`, string or array)
+  left the conversation list empty with a page error or made the Today / Yesterday headers unclickable; it now falls
+  back to an empty state and repairs itself on the next click, and a collapse choice stays in effect for the tab even
+  when browser storage refuses the write. (#7968 by @someaka; addresses #7954, hardening toward #7953)
 - **A Gateway turn that spans a WebUI restart streams again after the tab reattaches.** #7785 reattached such
   runs, but the reopened tab showed only a spinner until the run ended, and only the final answer text was saved:
   the reattach worker polled `GET /v1/runs/{id}` and never subscribed to `/v1/runs/{id}/events`. It now restores
