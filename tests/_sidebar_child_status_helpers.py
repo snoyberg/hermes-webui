@@ -15,6 +15,16 @@ def component_script(source=None):
         "_isSessionEffectivelyStreaming", "_hasPendingUserMessageSignal",
         "_sessionStateTooltip", "_sessionChildBadgeTooltip", "_hasUnreadForSession",
     ]
+    # Navigation helpers arrived upstream after the original carried renderer.
+    # Extract the complete real path when present, including its profile guard.
+    for name in [
+        "_wireSessionNewTabListeners", "_consumeSessionNewTabClick",
+        "_openSessionUrlInNewTab", "_newTabOwningProfileAllowed",
+        "_sidebarSessionProfileName", "_profileMatchesActiveProfile",
+        "_sessionUrlForSid", "_markSessionUrlExact", "_newTabOpenSupported",
+    ]:
+        if "function " + name + "(" in source:
+            names.append(name)
     # New helper is optional so the same harness exercises the exact prior head.
     if "function _createChildSessionStateIndicator(" in source:
         names.append("_createChildSessionStateIndicator")
@@ -32,6 +42,7 @@ const S={session:null,busy:false};
 const _showArchived=false, _sessionSelectMode=false, _showAllProfiles=false;
 const _expandedChildSessionKeys=new Set(), _sessionSwipeReturnOffsets=new Map();
 const _allProjects=[], _lineageReportInflight=new Map();
+const _allSessionsScope={allProfiles:false,profile:'default'};
 const animateRefresh=false, searchQueryRaw='';
 const SESSION_LONG_PRESS_DELAY_MS=400;
 const SESSION_ARCHIVE_SWIPE_THRESHOLD_PX=128, SESSION_DELETE_SWIPE_THRESHOLD_PX=128, SESSION_SWIPE_CANCEL_RATIO=0.75;
@@ -82,13 +93,14 @@ function renderFixture(raw, references, expanded=false, active='other'){
 
 
 FAKE_DOM = r"""
-const window={_sidebarDensity:'compact'};
+const window={_sidebarDensity:'compact',location:{origin:'http://localhost',href:'http://localhost/'},open:(...args)=>newTabs.push(args)};
+const newTabs=[];
 class Element {
-  constructor(tag){this.tag=tag;this.children=[];this.dataset={};this.attributes={};this.style={setProperty(){},removeProperty(){}};}
+  constructor(tag){this.tag=tag;this.children=[];this.dataset={};this.attributes={};this.listeners={};this.style={setProperty(){},removeProperty(){}};}
   setAttribute(k,v){this.attributes[k]=v;}
   appendChild(e){this.children.push(e);return e;}
   append(...els){this.children.push(...els);}
-  addEventListener(){}
+  addEventListener(name,callback){(this.listeners[name]??=[]).push(callback);}
   get classList(){return {add:()=>{},remove:()=>{},toggle:()=>{}};}
 }
 const document={createElement:tag=>new Element(tag)};
