@@ -9791,6 +9791,14 @@ function getModelLabel(modelId){
   // first-colon split alone cannot tell a `@custom:<slug>:<model>` from a
   // plain-lane `@custom:<model-with-colon>` (#7240).
   if(_dynamicModelLabels[modelId]) return _dynamicModelLabels[modelId];
+  // Opaque alias lanes preserve runtime routing, not a distinct display name.
+  // Resolve only their model portion through the same catalog/fallback pipeline
+  // as the selector target. Do this before slash/URI parsing so vendor paths
+  // and colon tags survive intact; never change the selected or stored value.
+  if(rawId.startsWith('@model-alias-')){
+    const sep=rawId.indexOf(':');
+    if(sep>0&&sep<rawId.length-1) return getModelLabel(rawId.slice(sep+1));
+  }
   // Preserve custom gateway model IDs exactly as configured. A custom id is
   // `@custom:<model>` in the plain custom lane or `@custom:<slug>:<model>` for
   // a named custom provider; the provider slug may itself be an endpoint
