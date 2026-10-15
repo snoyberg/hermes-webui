@@ -1378,6 +1378,66 @@ function applySessionTitleUpdate(sid, titleText, options={}){
 // BEFORE slash rewrites (/moa, bundles) mutate the payload and BEFORE
 // uploadPendingFiles() drains S.pendingFiles — so we restore what the user
 // actually typed, not the transformed send payload.
+// Failed attachment sends belong to the original profile/session, never the live
+// composer. Files and upload acknowledgements exist only for this page lifetime.
+const _uploadRecoveries=new Map();
+let _uploadRecoverySequence=0;
+function _uploadRecoveryOwnerVisible(record){
+  return !!(S.session&&S.session.session_id===record.sid
+    &&(S.activeProfile||S.session.profile||'default')===record.profile
+    &&!(typeof _loadingSessionId!=='undefined'&&_loadingSessionId)
+    &&!(typeof _newSessionInFlight!=='undefined'&&_newSessionInFlight));
+}
+function _releaseUploadRecovery(record){
+  _uploadRecoveries.delete(record.id);
+  record.items=[];
+  record.text='';
+  record.draftText='';
+  _renderUploadRecoveries();
+}
+function _discardUploadRecovery(id){
+  const record=_uploadRecoveries.get(id);
+  if(!record||record.state==='uploading'||record.state==='admitting')return;
+  _releaseUploadRecovery(record);
+}
+async function _retryUploadRecovery(id){
+  const record=_uploadRecoveries.get(id);
+  if(!record||record.state!=='failed'||_sendInProgress)return;
+  if(!_uploadRecoveryOwnerVisible(record)||S.busy
+    ||S.session.read_only||S.session.is_read_only
+    ||(typeof isCompressionUiRunning==='function'&&isCompressionUiRunning())
+    ||(typeof _newSessionInFlight!=='undefined'&&_newSessionInFlight)){
+    showToast(t('upload_recovery_owner'),3500);
+    return;
+  }
+  return send({uploadRecovery:record,literalSlash:true});
+}
+function _renderUploadRecoveries(){
+  const host=$('uploadRecoveries');
+  if(!host||typeof host.replaceChildren!=='function')return;
+  host.replaceChildren();
+  host.hidden=!_uploadRecoveries.size;
+  for(const record of _uploadRecoveries.values()){
+    const row=document.createElement('div');row.className='upload-recovery';
+    const label=document.createElement('span');
+    const uncertain=record.state==='uncertain';
+    label.textContent=`${record.title} (${record.profile}): ${record.items.length} ${t('upload_recovery_count')}. `
+      +(uncertain?t('upload_recovery_unknown'):
+        record.state==='uploading'?t('upload_recovery_uploading'):record.state==='admitting'?t('upload_recovery_sending'):
+        t('upload_recovery_retained'));
+    row.append(label);
+    if(!uncertain){
+      const retry=document.createElement('button');retry.type='button';retry.textContent=t('upload_recovery_retry');
+      retry.disabled=record.state!=='failed';
+      retry.onclick=()=>{void _retryUploadRecovery(record.id);};row.append(retry);
+    }
+    const discard=document.createElement('button');discard.type='button';discard.textContent=t('upload_recovery_discard');
+    discard.disabled=record.state==='uploading'||record.state==='admitting';
+    discard.onclick=()=>_discardUploadRecovery(record.id);row.append(discard);
+    host.append(row);
+  }
+}
+
 async function _recoverCompressedSend(error,sid,draftText,filesSnapshot,clearPromise,goalContinuationId){
   let payload;
   try{ payload=JSON.parse(error&&error.body||'{}'); }catch(_){ return false; }
@@ -1521,6 +1581,10 @@ function _restoreComposerDraftAfterFailedSend(draftText, filesSnapshot, sid, cle
 }
 
 async function send(){
+  const recovery=arguments[0]&&arguments[0].uploadRecovery;
+  if(recovery&&(_uploadRecoveries.get(recovery.id)!==recovery
+    ||recovery.state!=='failed'||!_uploadRecoveryOwnerVisible(recovery)||S.busy||_sendInProgress))return;
+  let uploadRecovery=recovery||null;
   // Static guards expect _defaultMessageMode to stay near send() while the actual
   // read remains in the S.busy branch below.
   // _defaultMessageMode
@@ -1530,7 +1594,7 @@ async function send(){
   // Snapshotting the argument synchronously makes the binding call-scoped: the
   // ID is posted by exactly the send it was handed to, and no other.
   const _sendOptions=arguments[0]||{};
-  let _goalContinuationId=_normalizeGoalContinuationId(_sendOptions.goalContinuationId);
+  let _goalContinuationId=_normalizeGoalContinuationId(recovery?recovery.goalContinuationId:_sendOptions.goalContinuationId);
   // Reject concurrent invocations early — before any await yields control.
   // If a send is already in-flight (e.g. queue drain), re-queue the message
   // instead of silently dropping it.
@@ -1574,17 +1638,16 @@ async function send(){
   try{
   const options=arguments[0]||{};
   const literalSlash=!!(options&&options.literalSlash);
-  let text=$('msg').value.trim();
-  if(!text&&!S.pendingFiles.length&&!_pendingSelections.length){_sendInProgress=false;_sendInProgressSid=null;return;}
+  let text=recovery?recovery.text:$('msg').value.trim();
+  if(!recovery&&!text&&!S.pendingFiles.length&&!_pendingSelections.length){_sendInProgress=false;_sendInProgressSid=null;return;}
   // Don't send while an inline message edit is active
   if(document.querySelector('.msg-edit-area')){_sendInProgress=false;_sendInProgressSid=null;return;}
-  _flushSelectionBlocksToComposer();
-  text=$('msg').value.trim();
-  if(!text&&!S.pendingFiles.length){_sendInProgress=false;_sendInProgressSid=null;return;}
+  if(!recovery){_flushSelectionBlocksToComposer();text=$('msg').value.trim();}
+  if(!recovery&&!text&&!S.pendingFiles.length){_sendInProgress=false;_sendInProgressSid=null;return;}
   // #7855: a refresh-restored continuation contributes its token only when the
   // user still sends the exact restored text; replaced/abandoned drafts fail
   // closed. Resolved here — still before the first await.
-  if(!_goalContinuationId){
+  if(!recovery&&!_goalContinuationId){
     const _restoredDraftGoalContinuationId=_takeRestoredDraftGoalContinuationId(text);
     if(_restoredDraftGoalContinuationId) _goalContinuationId=_restoredDraftGoalContinuationId;
   }
@@ -1621,6 +1684,7 @@ async function send(){
   const compressionRunning=typeof isCompressionUiRunning==='function'&&isCompressionUiRunning();
   _clearStaleBusyStateBeforeSend({compressionRunning});
   // If busy or a manual compression is still running, handle based on default_message_mode
+  if(recovery&&compressionRunning)return;
   if(S.busy||compressionRunning){
     if(text||S.pendingFiles.length){
       if(!S.session){await newSession();}
@@ -1704,8 +1768,8 @@ async function send(){
     if(typeof showToast==='function') showToast('Read-only imported sessions cannot be modified.',3000);
     return;
   }
-  let _slashDisplayTextOverride=null;
-  let _pendingMoaConfig=null;
+  let _slashDisplayTextOverride=recovery?recovery.displayText:null;
+  let _pendingMoaConfig=recovery?recovery.moaConfig:null;
   // Slash command intercept -- local commands handled without agent round-trip.
   // We push the user message BEFORE running the handler for echo-worthy
   // commands so chat order is correct: some handlers (e.g. cmdHelp) push
@@ -1862,7 +1926,7 @@ async function send(){
   // signature from here down; no code path below re-reads $('msg').value on the
   // happy path.
   const _submittedDraftTextForClear=$('msg').value||'';
-  $('msg').value='';autoResize();
+  if(!recovery){$('msg').value='';autoResize();}
 
   // #5912 gate CORE fix: snapshot the pending files that belong to THIS send
   // BEFORE the await, and upload exactly that snapshot. Otherwise a re-entrant /
@@ -1870,9 +1934,9 @@ async function send(){
   // S.pendingFiles and later re-uploads the first send's attachment. Detach the
   // snapshot from S.pendingFiles now so files staged AFTER this point belong to
   // the next send only.
-  const _submittedFiles=[...(S.pendingFiles||[])];
+  const _submittedFiles=recovery?recovery.items.filter(item=>!item.uploaded).map(item=>item.file):[...(S.pendingFiles||[])];
   const _submittedDraftFilesForClear=[..._submittedFiles];
-  S.pendingFiles=[];
+  if(!recovery)S.pendingFiles=[];
   if(typeof renderTray==='function')renderTray();
 
   // #5912 gate SILENT fix: clear the PERSISTED draft here — alongside the
@@ -1880,12 +1944,35 @@ async function send(){
   // window is not clobbered by a delayed text:'' post. Keep the promise so the
   // #5472 failed-send restore can chain its re-persist after this clear resolves.
   let _composerDraftClearPromise=null;
-  if (activeSid && typeof _clearComposerDraft === 'function') _composerDraftClearPromise=_clearComposerDraft(activeSid,_submittedDraftTextForClear,_submittedDraftFilesForClear);
+  if(!recovery){
+    if (activeSid && typeof _clearComposerDraft === 'function') _composerDraftClearPromise=_clearComposerDraft(activeSid,_submittedDraftTextForClear,_submittedDraftFilesForClear);
+  }
 
   setComposerStatus(_submittedFiles.length?'Uploading…':'');
   let uploaded=[];
-  try{uploaded=await uploadPendingFiles({files:_submittedFiles, sessionId:activeSid, clearPending:false});}
-  catch(e){if(!text){setComposerStatus(`Upload error: ${e.message}`);return;}}
+  if(!uploadRecovery&&_submittedFiles.length){
+    uploadRecovery={id:++_uploadRecoverySequence,sid:activeSid,
+      profile:S.activeProfile||S.session.profile||'default',title:S.session.title||activeSid,
+      text,draftText:_failedSendDraftText,displayText:_slashDisplayTextOverride,
+      goalContinuationId:_goalContinuationId,
+      modelState:_chatPayloadModelState(),workspace:S.session.workspace,
+      moaConfig:_pendingMoaConfig,items:_submittedFiles.map(file=>({file,uploaded:null})),
+      state:'uploading'};
+    _uploadRecoveries.set(uploadRecovery.id,uploadRecovery);
+  }
+  if(uploadRecovery){uploadRecovery.state='uploading';_renderUploadRecoveries();}
+  try{uploaded=await uploadPendingFiles({files:_submittedFiles, sessionId:activeSid, clearPending:false,
+    recoveryItems:uploadRecovery?uploadRecovery.items:undefined});}
+  catch(e){
+    if(uploadRecovery){uploadRecovery.state='failed';_renderUploadRecoveries();}
+    setComposerStatus(`Upload error: ${e.message}`);return;
+  }
+  if(uploadRecovery){
+    uploaded=uploadRecovery.items.map(item=>item.uploaded);
+    if(uploaded.some(item=>!item)||!_uploadRecoveryOwnerVisible(uploadRecovery)||S.busy){
+      uploadRecovery.state='failed';_renderUploadRecoveries();return;
+    }
+  }
   // Clear the uploading status now that upload is done — if we don't clear here
   // it stays visible for the entire duration of the agent stream, since
   // setComposerStatus('') is only called in setBusy(false), not setBusy(true).
@@ -1918,6 +2005,7 @@ async function send(){
       }
     }
   }
+  if(uploadRecovery&&(!_uploadRecoveryOwnerVisible(uploadRecovery)||S.busy))return;
   if(!msgText){setComposerStatus('Nothing to send');return;}
   // Composer textarea + persisted draft were already captured and cleared
   // immediately after capture (above, salvage of #4750 + #5912 gate fix) to close
@@ -2010,7 +2098,7 @@ async function send(){
   let modelStateForPostStart;
   let explicitPickForPostStart;
   try{
-    const _modelState=_chatPayloadModelState();
+    const _modelState=uploadRecovery?uploadRecovery.modelState:_chatPayloadModelState();
     modelStateForPostStart=_modelState;
     const _pendingPick=(typeof _readPendingSessionModel==='function')
       ? _readPendingSessionModel(activeSid)
@@ -2040,13 +2128,15 @@ async function send(){
     // pick. (#3739/#3737, Codex catch)
     if(_pendingPickMatch && typeof _clearPendingSessionModel==='function') _clearPendingSessionModel(activeSid);
     explicitPickForPostStart=_explicitPick;
-    const startData=await api('/api/chat/start',{method:'POST',body:JSON.stringify({
+    if(uploadRecovery){uploadRecovery.state='admitting';_renderUploadRecoveries();}
+    // A lost response does not prove rejection: never replay chat admission.
+    const startData=await api('/api/chat/start',{method:'POST',retries:0,redirect401:!uploadRecovery,body:JSON.stringify({
       session_id:activeSid,message:msgText,
       // S.session.model remains authoritative; the helper only resolves a
       // matching provider fallback for the same outgoing model.
-      model:_modelState.model,workspace:S.session.workspace,
+      model:_modelState.model,workspace:uploadRecovery?uploadRecovery.workspace:S.session.workspace,
       model_provider:_modelState.model_provider,
-      profile:S.activeProfile||S.session.profile||'default',
+      profile:uploadRecovery?uploadRecovery.profile:(S.activeProfile||S.session.profile||'default'),
       explicit_model_pick:_explicitPick||undefined,
       attachments:uploaded.length?uploaded:undefined,
       moa_config:_pendingMoaConfig?true:undefined,
@@ -2063,10 +2153,30 @@ async function send(){
       // get marker admission".
       goal_continuation_id:_goalContinuationId||''
     })});
+    if(uploadRecovery&&(!startData||typeof startData.stream_id!=='string'||!startData.stream_id.trim())){
+      throw new Error('Chat admission acknowledgement missing');
+    }
     _pendingMoaConfig=null;
     postStartData = startData;
+    if(uploadRecovery){
+      const stillVisible=_uploadRecoveryOwnerVisible(uploadRecovery);
+      _releaseUploadRecovery(uploadRecovery);uploadRecovery=null;
+      // Navigation wins the pane; the server owns the accepted background turn.
+      if(!stillVisible)return;
+    }
   }catch(e){
     const errMsg=String((e&&e.message)||'');
+    if(uploadRecovery){
+      uploadRecovery.state=uploadRecovery.state==='admitting'?'uncertain':'failed';
+      _renderUploadRecoveries();
+      delete INFLIGHT[activeSid];
+      if(typeof clearInflightState==='function')clearInflightState(activeSid);
+      if(_uploadRecoveryOwnerVisible(uploadRecovery)){
+        stopApprovalPolling();stopClarifyPolling();removeThinking();
+        setBusy(false);setComposerStatus(t('upload_recovery_unknown'));
+      }
+      return;
+    }
     // If /api/chat/start returns 404, the session was deleted server-side
     // (its sidecar is gone) while GET kept returning a CLI stub (#2782). Strip
     // the stale /session/<id> URL and clear localStorage so a reload does not
@@ -2225,7 +2335,10 @@ async function send(){
   // Open SSE stream and render tokens live
   attachLiveStream(activeSid, streamId, uploadedNames);
 
-  }finally{ _sendInProgress=false; _sendInProgressSid=null; }
+  }finally{
+    if(uploadRecovery&&uploadRecovery.state==='uploading'){uploadRecovery.state='failed';_renderUploadRecoveries();}
+    _sendInProgress=false; _sendInProgressSid=null;
+  }
 }
 
 async function startRegeneration(sessionId, regenerationRevision){
