@@ -261,6 +261,11 @@ If an AI assistant is helping with install, reinstall, bootstrap, provider setup
 - Live interim transcription appears in the textarea
 - Auto-stops after ~2s of silence
 - Appends to existing textarea content (doesn't replace)
+- Composer dictation and audio recording request a best-effort Screen Wake Lock
+  while active and visible, releasing it on stop/error or when hidden and
+  reacquiring on return. Unsupported or denied wake locks do not block recording.
+  This does not guarantee recording through device lock, browser suspension, or
+  page reload; it is not an audio backup or failed-upload recovery mechanism.
 - Hidden when browser doesn't support Web Speech API (Chrome, Edge, Safari)
 - A saved fallback from browser speech recognition to server-side recording expires after 24 hours. Preferences stored by older versions get a 24-hour window on first use after upgrading. On reload after expiry, the mic returns to normal capture selection: server transcription takes priority when available; otherwise it uses browser speech recognition.
 
