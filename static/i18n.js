@@ -5,6 +5,14 @@
 
 const LOCALES = {
   en: {
+    upload_recovery_owner: 'Open the original conversation and wait until it is idle to retry.',
+    upload_recovery_unknown: 'Send acknowledgement unknown. Check the conversation before sending again.',
+    upload_recovery_uploading: 'Uploading…',
+    upload_recovery_sending: 'Sending…',
+    upload_recovery_retained: 'Not sent. Retained in this tab only; reload loses it.',
+    upload_recovery_retry: 'Retry',
+    upload_recovery_discard: 'Discard',
+    upload_recovery_count: 'attachment(s)',
     offline_title: 'Connection lost',
     offline_browser_detail: 'Your browser reports that this device is offline.',
     offline_network_detail: 'Hermes is unreachable from this browser right now.',
