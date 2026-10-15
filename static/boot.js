@@ -1162,6 +1162,9 @@ function _micToastKeyForRecognitionError(error){
 
   function _setRecording(on){
     window._micActive=on;
+    // All capture backends own the same best-effort screen wake lock.
+    if(on) void _acquireMicWakeLock();
+    else void _releaseMicWakeLock();
     btn.classList.toggle('recording',on);
     // Active-state title flips so the tooltip is honest about what
     // pressing the button will do (#1488).
@@ -1331,7 +1334,7 @@ function _micToastKeyForRecognitionError(error){
       && _micRestartCount<_micMaxRestarts;
   }
 
-  // Screen Wake Lock while dictating. All acquire/release ops are chained onto a
+  // Screen Wake Lock while capturing speech or audio. All acquire/release ops are chained onto a
   // single in-flight promise (_micWakeLockOp) so rapid start/stop/visibility
   // churn runs strictly in order and can't interleave to leak a lock or null
   // _micWakeLock mid-request.
@@ -1339,11 +1342,11 @@ function _micToastKeyForRecognitionError(error){
     if(!navigator.wakeLock) return Promise.resolve();
     _micWakeLockOp=Promise.resolve(_micWakeLockOp).then(async()=>{
       if(_micWakeLock) return;
-      if(!window._micActive||_activeCaptureMode!=='speech') return;
+      if(!window._micActive||document.visibilityState==='hidden') return;
       try{
         const lock=await navigator.wakeLock.request('screen');
         // If the session ended while awaiting, don't hold a stale lock.
-        if(!window._micActive||_activeCaptureMode!=='speech'){
+        if(!window._micActive||document.visibilityState==='hidden'){
           try{ await lock.release(); }catch(_){}
           return;
         }
@@ -1367,13 +1370,13 @@ function _micToastKeyForRecognitionError(error){
   }
 
   // The OS drops a screen wake lock when the tab is hidden; reacquire on return
-  // if we're still dictating (release on hide is a no-op if none is held).
+  // if capture is still active (release on hide is a no-op if none is held).
   document.addEventListener('visibilitychange',()=>{
     if(document.visibilityState==='hidden'){
       void _releaseMicWakeLock();
       return;
     }
-    if(window._micActive&&_activeCaptureMode==='speech'){
+    if(window._micActive){
       void _acquireMicWakeLock();
     }
   });
