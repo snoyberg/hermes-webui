@@ -271,6 +271,18 @@ If an AI assistant is helping with install, reinstall, bootstrap, provider setup
 - Hidden when browser doesn't support Web Speech API (Chrome, Edge, Safari)
 - A saved fallback from browser speech recognition to server-side recording expires after 24 hours. Preferences stored by older versions get a 24-hour window on first use after upgrading. On reload after expiry, the mic returns to normal capture selection: server transcription takes priority when available; otherwise it uses browser speech recognition.
 
+When an attachment upload fails, the composer keeps the original message and
+files in **this page's memory** and shows **Retry / Discard**. Retry only uploads
+files without an acknowledgement and sends no chat turn until the entire batch
+is uploaded. Return to the original profile and conversation, with that
+conversation idle, to retry; newer composer drafts are left untouched.
+Discard releases the retained browser files, not already-uploaded server copies.
+Reloading the page, closing the tab, or a browser crash loses this recovery.
+If chat submission has an unknown acknowledgement, the card offers Discard but
+not Retry: check the conversation before composing another send to avoid duplicates.
+This recovery applies to normal attachment sends, including recorded audio;
+active-run Steer and existing queued-message workflows are separate.
+
 ### Profiles
 - Profile chip in the **composer footer** -- dropdown showing all profiles with gateway status and model info
 - The profile dropdown and Tasks follow the installed Agent's profile liveness rules. With marker-aware cores, a named home under `profiles/` needs an identity marker such as `config.yaml` and must not be tombstoned in `profiles/.deleted/<name>`. Older cores without marker support still recognize directory-only named homes and can read their saved jobs. Guarded reads do not create `cron/` directories in rejected homes. The default home and custom `HERMES_HOME` / `HERMES_BASE_HOME` roots remain readable.
