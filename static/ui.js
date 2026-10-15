@@ -26506,6 +26506,7 @@ async function promptNewFolder(targetDir = S.currentDir || '.'){
 }
 
 function renderTray(){ // non-media files use paperclip chip
+  if(typeof _renderUploadRecoveries==='function')_renderUploadRecoveries();
   const tray=$('attachTray');tray.innerHTML='';
   if(!S.pendingFiles.length){tray.classList.remove('has-files');updateSendBtn();return;}
   tray.classList.add('has-files');
@@ -26632,6 +26633,7 @@ async function uploadPendingFiles(options={}){
   const sessionId=String(opts.sessionId||(S.session&&S.session.session_id)||'');
   if(!pendingFiles.length||!sessionId)return[];
   const clearPending=!(opts&&opts.clearPending===false);
+  const recoveryItems=opts.recoveryItems;
   const names=[];let failures=0;
   _uploadPendingFilesUpdateProgress(sessionId,0);
   const total=pendingFiles.length;
@@ -26644,15 +26646,22 @@ async function uploadPendingFiles(options={}){
       const isArchive=_ARCHIVE_EXTS.test(f.name);
       const url=new URL(isArchive?'api/upload/extract':'api/upload',document.baseURI||location.href).href;
       const res=await fetch(url,{method:'POST',credentials:'include',body:fd});
-      if(_redirectIfUnauth(res)) return;
+      // Keep recoverable browser bytes on the page when authentication expires.
+      if(recoveryItems&&res.status===401)throw new Error('Upload authentication required; sign in in another tab, then retry.');
+      if(_redirectIfUnauth(res))return;
       if(!res.ok){const err=await res.text();throw new Error(err);}
       const data=await res.json();
       if(data.error)throw new Error(data.error);
+      if(recoveryItems&&!(isArchive?data.dest:data.filename))throw new Error('Invalid upload acknowledgement');
       if(isArchive){
         names.push({name: data.dest, path: data.dest, extracted: data.extracted});
         if(typeof loadDir==='function'&&_uploadPendingFilesCurrentSession(sessionId))loadDir(S.currentDir||'.');
       }else{
         names.push({name: data.filename, path: data.path, mime: data.mime, size: data.size, is_image: !!data.is_image});
+      }
+      if(recoveryItems){
+        const item=recoveryItems.find(item=>item.file===f);
+        if(item)item.uploaded=names[names.length-1];
       }
     }catch(e){failures++;setStatus(`\u274c ${t('upload_failed')}${f.name} \u2014 ${e.message}`);}
     _uploadPendingFilesUpdateProgress(sessionId,Math.round((i+1)/total*100));
@@ -26660,6 +26669,7 @@ async function uploadPendingFiles(options={}){
   _uploadPendingFilesUpdateProgress(sessionId,null);
   if(clearPending&&_uploadPendingFilesCurrentSession(sessionId)){S.pendingFiles=[];renderTray();}
   else if(typeof renderTray==='function'&&_uploadPendingFilesCurrentSession(sessionId))renderTray();
+  if(recoveryItems&&failures)throw new Error('Some files could not be uploaded.');
   if(failures===total&&total>0)throw new Error(t('all_uploads_failed',total));
   // Show extraction summary
   const extracted=names.filter(n=>n.extracted);
