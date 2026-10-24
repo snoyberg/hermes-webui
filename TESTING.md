@@ -84,6 +84,19 @@ including requests started without a session. The Node harness executes the
 real loaders with deferred responses and PDF-ready/timeout callbacks; it does
 not certify browser rendering or real CDN availability.
 
+## Failed-upload continuation ownership
+
+Run `./scripts/test.sh tests/test_upload_recovery.py tests/test_upload_recovery_browser.py`
+with Node and Playwright/Chromium available. The 21-case Node driver composes the
+production goal-draft helpers with send and upload recovery. It covers explicit
+and refresh-restored continuation tokens across failed uploads, plus an ordinary
+turn retried while a newer continuation draft exists. Retry posts only the
+retained request's token and leaves the newer draft's text, Files and token
+untouched. The 390px touch and 1280px browser cases exercise Retry and keyboard
+activation with the same ownership assertion. These fixtures use synthetic bytes
+and intercepted HTTP, not inference or real microphone capture; recovery remains
+page-lifetime only.
+
 ## Sidebar child-state presentation
 
 Run `./scripts/test.sh tests/test_child_session_status.py tests/test_child_session_ux.py tests/test_parent_notification_scope.py tests/test_sidebar_tooltips.py tests/test_465_session_branching.py tests/test_session_lineage_collapse.py tests/test_session_touch_actions.py tests/test_issue3242_3214_i18n_tooltips.py`.
