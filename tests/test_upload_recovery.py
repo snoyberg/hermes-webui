@@ -19,5 +19,5 @@ def test_failed_upload_recovery():
     )
     assert result.returncode == 0, result.stdout + result.stderr
     report = json.loads(result.stdout)
-    assert report["caseCount"] == len(report["cases"]) == 18
-    assert len({case["name"] for case in report["cases"]}) == 18
+    assert report["caseCount"] == len(report["cases"]) == 21
+    assert len({case["name"] for case in report["cases"]}) == 21
