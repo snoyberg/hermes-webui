@@ -18,6 +18,8 @@ def component_script(source=None):
     # Navigation helpers arrived upstream after the original carried renderer.
     # Extract the complete real path when present, including its profile guard.
     for name in [
+        "_installSessionOpenControl",
+        "_retireProjectPickerForExplicitRepaint",
         "_wireSessionNewTabListeners", "_consumeSessionNewTabClick",
         "_openSessionUrlInNewTab", "_newTabOwningProfileAllowed",
         "_sidebarSessionProfileName", "_profileMatchesActiveProfile",
@@ -29,6 +31,10 @@ def component_script(source=None):
     if "function _createChildSessionStateIndicator(" in source:
         names.append("_createChildSessionStateIndicator")
     functions = []
+    for name in ["SESSION_ROW_NESTED_CONTROL_SELECTOR", "_sessionRowPointerReleasePending"]:
+        declaration = re.search(r"^(?:const|let) " + name + r" = .*?;$", source, re.M)
+        if declaration:
+            functions.append(declaration.group())
     for name in names:
         match = re.search(r"^function " + name + r"\(.*?^\}", source, re.M | re.S)
         assert match, name
@@ -49,6 +55,7 @@ const SESSION_ARCHIVE_SWIPE_THRESHOLD_PX=128, SESSION_DELETE_SWIPE_THRESHOLD_PX=
 let _renamingSid=null, _sessionActionMenu=null;
 const ICONS={more:'...',pin:'P'};
 const opened=[];
+function $(id){return document.getElementById(id);}
 function t(key, value){
   if(key==='session_meta_children') return value+' children';
   if(key==='session_child_toggle_hint') return value+' (click to show or hide)';
