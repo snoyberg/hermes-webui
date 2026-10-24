@@ -1594,7 +1594,9 @@ async function send(){
   // Snapshotting the argument synchronously makes the binding call-scoped: the
   // ID is posted by exactly the send it was handed to, and no other.
   const _sendOptions=arguments[0]||{};
-  let _goalContinuationId=_normalizeGoalContinuationId(recovery?recovery.goalContinuationId:_sendOptions.goalContinuationId);
+  let _goalContinuationId=_normalizeGoalContinuationId(_sendOptions.goalContinuationId);
+  // A retained upload owns its original invocation, never the newer composer.
+  if(recovery) _goalContinuationId=_normalizeGoalContinuationId(recovery.goalContinuationId);
   // Reject concurrent invocations early — before any await yields control.
   // If a send is already in-flight (e.g. queue drain), re-queue the message
   // instead of silently dropping it.
