@@ -2357,16 +2357,20 @@ def test_unassigned_refill_cannot_clobber_a_resolved_assignment(
 def test_background_source_exclusion_literal_matches_the_constant():
     """Default loading excludes background chips and internal tool workers.
 
-    Tool workers are not background chips eligible for project recovery.
-    Keep the default SQL exclusion and interactive recovery exclusion aligned.
+    Tool workers are excluded from both the bounded interactive window and
+    assigned recovery; one-shot project recovery remains available.
     """
     from pathlib import Path
 
     source = Path(models.__file__).read_text(encoding="utf-8")
-    literal = ", ".join(f'"{name}"' for name in (*models.BACKGROUND_CLI_SOURCES, "tool"))
+    excluded = (*models.INTERACTIVE_WINDOW_EXCLUDED_CLI_SOURCES, "tool")
+    literal = ", ".join(f'"{name}"' for name in excluded)
     assert f"exclude_sources=({literal}) if source_filter is None else None" in source, (
         "the interactive exclude_sources literal must list exactly "
-        f"BACKGROUND_CLI_SOURCES plus tool ({models.BACKGROUND_CLI_SOURCES!r})"
+        f"INTERACTIVE_WINDOW_EXCLUDED_CLI_SOURCES plus tool ({excluded!r})"
+    )
+    assert '("cron", "webhook", "kanban", "oneshot", "tool") if source_filter is None' in source, (
+        "test_issue2841_show_cron_sessions_toggle.py pins this exact substring"
     )
 
 

@@ -84,6 +84,19 @@ including requests started without a session. The Node harness executes the
 real loaders with deferred responses and PDF-ready/timeout callbacks; it does
 not certify browser rendering or real CDN availability.
 
+## Failed-upload continuation ownership
+
+Run `./scripts/test.sh tests/test_upload_recovery.py tests/test_upload_recovery_browser.py`
+with Node and Playwright/Chromium available. The 21-case Node driver composes the
+production goal-draft helpers with send and upload recovery. It covers explicit
+and refresh-restored continuation tokens across failed uploads, plus an ordinary
+turn retried while a newer continuation draft exists. Retry posts only the
+retained request's token and leaves the newer draft's text, Files and token
+untouched. The 390px touch and 1280px browser cases exercise Retry and keyboard
+activation with the same ownership assertion. These fixtures use synthetic bytes
+and intercepted HTTP, not inference or real microphone capture; recovery remains
+page-lifetime only.
+
 ## Sidebar child-state presentation
 
 Run `./scripts/test.sh tests/test_child_session_status.py tests/test_child_session_ux.py tests/test_parent_notification_scope.py tests/test_sidebar_tooltips.py tests/test_465_session_branching.py tests/test_session_lineage_collapse.py tests/test_session_touch_actions.py tests/test_issue3242_3214_i18n_tooltips.py`.
@@ -293,12 +306,12 @@ write the open picker at 390x844, 820x1180, 844x390 and 1440x900.
 Last, it runs `tests/browser_session_row_activation.py`, which imports three
 conversations and opens them from the sidebar without a pointer press. Tab
 from the conversation filter must reach a conversation title, every row title
-must be a focusable link, with `aria-current="page"` on the open
+must be a native button, with `aria-current="page"` on the open
 conversation's title. Mouse events without pointer events (how Firefox performs
 a screen reader's activate command, e.g. NVDA in browse mode), a bare
 `element.click()`, and Enter on the focused title must each open the
-conversation, and a sidebar repaint must never move focus to a title (a screen
-reader would pull its reading cursor back to the list). After Enter opens a
+conversation. A sidebar repaint restores the same previously focused title;
+it must not steal focus from the composer or another control. After Enter opens a
 conversation, focus must be on that row's rebuilt title, so the next Tab reaches
 its ⋮ trigger; Enter on one title and then another before the first has loaded
 must leave focus on the second (open) conversation's title, never the first; on
@@ -2157,6 +2170,13 @@ Each has automated API-level tests in `tests/test_sprint{N}.py`.
 - Double-click a file in workspace panel to rename. Enter saves, Escape cancels.
 - Create a folder via folder icon in workspace header.
 - Add `#tag` to session title. Verify tag chip appears in sidebar. Click to filter.
+  - At 390px with touch input, the first tap filters without opening the conversation
+    or moving the chip as the timestamp changes. Verify long-press still opens actions.
+  - With a conversation's project picker open, click a tag on another conversation.
+    The picker closes and the tag filter repaints immediately without opening that conversation.
+  - Open the project context menu or composer model menu, then click a conversation
+    title: the menu closes and the conversation opens once. Also check Enter/Space,
+    J/K navigation, input-field protection, desktop hover, and keyboard focus.
 - Archive a session. Verify it disappears. Toggle "Show archived" to see it.
 
 ### Sprint 15: Session Projects
