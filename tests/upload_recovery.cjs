@@ -15,13 +15,14 @@ function between(source, start, end) {
   return source.slice(a,b);
 }
 const sendSource=between(messages,'async function send(){','\nasync function startRegeneration(');
+const goalSource=between(messages,'function _normalizeGoalContinuationId(','\nfunction _bgTaskCompleteRingBufferAdd(');
 const restoreSource=between(messages,'function _restoreComposerDraftAfterFailedSend(','\nasync function send(');
 const uploadSource=ui.slice(ui.indexOf('async function uploadPendingFiles(options={})'));
 assert(uploadSource.startsWith('async function uploadPendingFiles'), 'missing uploader');
 const rawSource=between(boot,'  async function _sendRawAudio(blob){','  function _commitTranscript(');
 
 async function runCase(name, options={}) {
-  const input={value:options.text||''};
+  const input={value:options.text||'',dataset:{}};
   const state={uploads:[],starts:[],status:[],tray:[],clears:[],saves:[],streams:[],queued:[],toasts:[]};
   const file=new File([new Uint8Array([82,73,70,70,0,1,2,3])], 'voice-input-synthetic.webm',{type:'audio/webm'});
   const second=new File(['synthetic second fixture'], 'second.webm',{type:'audio/webm'});
@@ -75,7 +76,8 @@ async function runCase(name, options={}) {
     },
   };
   vm.createContext(context);
-  vm.runInContext(between(messages,'const _uploadRecoveries=','async function _recoverCompressedSend(')+restoreSource+'\n'+uploadSource+'\n'+sendSource+'\n'+rawSource,context);
+  vm.runInContext(goalSource+'\n'+between(messages,'const _uploadRecoveries=','async function _recoverCompressedSend(')+restoreSource+'\n'+uploadSource+'\n'+sendSource+'\n'+rawSource,context);
+  if(options.restoredToken) context._setRestoredGoalContinuationDraft(options.restoredToken,input.value);
   if(options.realApi)vm.runInContext(apiSource,context);
   if(options.rawHandoff){
     S.pendingFiles=[];
@@ -86,7 +88,7 @@ async function runCase(name, options={}) {
     await context._sendRawAudio(new Blob(['synthetic raw recorder handoff'],{type:'audio/webm'}));
     await task;
   }else{
-    const first=context.send();
+    const first=context.send({goalContinuationId:options.token||''});
     if(options.hold){await Promise.resolve();await Promise.resolve();await context.send();release();}
     await first;
   }
@@ -123,6 +125,9 @@ async function runCase(name, options={}) {
     ['navigate-success',{switchSession:true}],
     ['single-flight',{failure:true}],
     ['raw-handoff',{failure:true,rawHandoff:true}],
+    ['goal-retry-newer-draft',{failure:true,text:'Original continuation',token:' original-token '}],
+    ['restored-goal-retry-newer-draft',{failure:true,text:'Restored continuation',restoredToken:' restored-token '}],
+    ['ordinary-retry-newer-goal-draft',{failure:true,text:'Original user turn'}],
   ]){
     config.act=async({context:c,S,input,state,file,second,records,options})=>{
       assert.equal(state.starts.length,(options.startFailure||options.unknown)?1:0,'no incomplete turn');
@@ -157,6 +162,11 @@ async function runCase(name, options={}) {
       const acknowledged=record.items.filter(item=>item.uploaded).length;
       const originalText=record.text;
       input.value='newer untouched draft';S.pendingFiles=[second];
+      const goalCase=name.includes('retry-newer-');
+      if(goalCase){
+        assert.equal(record.goalContinuationId,(options.token||options.restoredToken||'').trim());
+        c._setRestoredGoalContinuationDraft('newer-token',input.value);
+      }
       if(name==='repeat-failure'){
         await c._retryUploadRecovery(id);assert.equal(record.state,'failed');
         assert.equal(state.starts.length,0);assert.equal(record.items[0].file,file);
@@ -168,6 +178,12 @@ async function runCase(name, options={}) {
       assert.equal(state.starts.length,1);assert.equal(records().length,0);
       assert.equal(input.value,'newer untouched draft');assert.equal(S.pendingFiles[0],second);
       assert.equal(state.starts[0].session_id,'A');assert.equal(state.starts[0].profile,'fixture');
+      if(goalCase){
+        assert.equal(state.starts[0].goal_continuation_id,(options.token||options.restoredToken||'').trim(),'retry uses only its retained token');
+        assert.equal(input.dataset.goalContinuationId,'newer-token','retry must not consume newer draft token');
+        assert.equal(input.dataset.goalContinuationText,'newer untouched draft');
+        assert.equal(c._takeRestoredDraftGoalContinuationId(input.value),'newer-token','newer draft still owns its token');
+      }
       if(originalText)assert(state.starts[0].message.startsWith(originalText));
       assert.equal(state.starts[0].attachments.length,options.rawHandoff?1:(name==='partial'?2:1));
       if(name!=='repeat-failure')assert.equal(state.uploads.length-before,(name==='partial'?2:1)-acknowledged,'retry only missing uploads');
