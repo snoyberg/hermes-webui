@@ -24,7 +24,8 @@ def test_upload_recovery_browser(width, tmp_path):
     ui = (ROOT / "static/ui.js").read_text()
     html = re.sub(r"<script\b[^>]*>.*?</script>", "", (ROOT / "static/index.html").read_text(), flags=re.S)
     html = re.sub(r"<link\b[^>]*>", "", html)
-    script = _between(messages, "const _uploadRecoveries=", "async function _recoverCompressedSend(")
+    script = _between(messages, "function _normalizeGoalContinuationId(", "\nfunction _bgTaskCompleteRingBufferAdd(")
+    script += _between(messages, "const _uploadRecoveries=", "async function _recoverCompressedSend(")
     script += _between(messages, "async function send(){", "\nasync function startRegeneration(")
     script += ui[ui.index("async function uploadPendingFiles(options={})"):]
     script += _between((ROOT / "static/workspace.js").read_text(), "async function api(", "\nfunction recordClientSSEError(")
@@ -88,7 +89,7 @@ Object.assign(window,{
           S.pendingFiles=[new File(['SYNTHETIC'], 'voice.webm',{type:'audio/webm'})];
         }""")
         page.screenshot(path=str(tmp_path / f"before-{width}.png"), full_page=True)
-        page.evaluate("send()")
+        page.evaluate("send({goalContinuationId:'original-token'})")
         retry = page.get_by_role("button", name="Retry", exact=True)
         discard = page.get_by_role("button", name="Discard", exact=True)
         assert retry.is_visible() and discard.is_visible()
@@ -103,7 +104,7 @@ Object.assign(window,{
         (retry.tap if width < 640 else retry.click)()
         page.wait_for_function("[..._uploadRecoveries.values()][0].state==='failed'")
         assert len(uploads) == 2 and len(starts) == 0
-        page.evaluate("$('msg').value='Newer draft';S.session={session_id:'B'}")
+        page.evaluate("$('msg').value='Newer draft';_setRestoredGoalContinuationDraft('newer-token','Newer draft');S.session={session_id:'B'}")
         retry.click()
         assert len(uploads) == 2
         page.evaluate("S.session={session_id:'A'}")
@@ -112,7 +113,9 @@ Object.assign(window,{
         page.keyboard.press("Enter")
         page.wait_for_function("_uploadRecoveries.size===0")
         assert len(starts) == 1 and starts[0]["message"].startswith("Please listen")
+        assert starts[0]["goal_continuation_id"] == "original-token"
         assert page.locator("#msg").input_value() == "Newer draft"
+        assert page.evaluate("_peekRestoredGoalContinuationDraft()") == {"id": "newer-token", "text": "Newer draft"}
         page.evaluate("S.busy=false;S.pendingFiles=[new File(['SYNTHETIC'],'voice.webm')]")
         mode["fail"] = True
         page.evaluate("send()")
