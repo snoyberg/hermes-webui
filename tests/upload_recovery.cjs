@@ -79,6 +79,7 @@ async function runCase(name, options={}) {
   vm.runInContext(goalSource+'\n'+between(messages,'const _uploadRecoveries=','async function _recoverCompressedSend(')+restoreSource+'\n'+uploadSource+'\n'+sendSource+'\n'+rawSource,context);
   if(options.restoredToken) context._setRestoredGoalContinuationDraft(options.restoredToken,input.value);
   if(options.realApi)vm.runInContext(apiSource,context);
+  if(options.setup) await options.setup({context,S,input,state,file,second});
   if(options.rawHandoff){
     S.pendingFiles=[];
     context.window._micPendingSend=true;
@@ -103,7 +104,8 @@ async function runCase(name, options={}) {
   assert.equal(state.starts.length<=1,true,'one turn at most');
   return result;
 }
-(async()=>{
+module.exports={runCase};
+if(require.main===module)(async()=>{
   const result=await runCase('text-and-audio',{failure:true,text:'Please listen'});
   assert.equal(result.starts,0,'must not admit an incomplete text-only turn');
   const cases=[result];
