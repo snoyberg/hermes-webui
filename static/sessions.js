@@ -357,7 +357,7 @@ function _handleComposerDraftPostFailure(error, sid, text, files, intent=null) {
   }
 }
 
-function _postComposerDraftPayload(sid, draft, intent=null, goalContinuationId='') {
+function _postComposerDraftPayload(sid, draft, intent=null, goalContinuationId='', retainFiles=false) {
   const requestSid = _safeDraftSessionId(sid);
   if (!requestSid) return Promise.resolve();
   const normalizedText = String((draft && draft.text) || '');
@@ -442,7 +442,15 @@ function _postComposerDraftPayload(sid, draft, intent=null, goalContinuationId='
         && (_composerDraftLatestIntentSequenceBySid.get(responseSid) || 0) > intent.sequence) {
       return response;
     }
-    if (intent) _composerDraftLocalFallbackBySid.delete(requestSid);
+    // Retry navigation must not trade a newer draft's File bytes for server
+    // metadata. Reuse the session-owned local intent until it is sent/replaced.
+    if (intent) {
+      _composerDraftLocalFallbackBySid.delete(requestSid);
+      if (retainFiles && intent.files.length) {
+        _composerDraftLocalFallbackBySid.set(responseSid, intent);
+        _composerDraftLatestIntentSequenceBySid.set(responseSid, intent.sequence);
+      }
+    }
     remember(responseSid);
     return response;
   }, (error) => {
@@ -477,7 +485,7 @@ function _rememberComposerDraftPayloadState(sid, text, files) {
 }
 
 // Immediate save used before session switches.
-function _saveComposerDraftNow(sid, text, files, goalContinuationId) {
+function _saveComposerDraftNow(sid, text, files, goalContinuationId, retainFiles=false) {
   if (!sid) return Promise.resolve();
   clearTimeout(_draftSaveTimer);
   const normalizedText = String(text || '');
@@ -511,7 +519,7 @@ function _saveComposerDraftNow(sid, text, files, goalContinuationId) {
     return Promise.resolve();
   }
   const intent = _setComposerDraftLocalIntent(sid, normalizedText, liveFiles);
-  return _postComposerDraftPayload(sid, normalizedDraft, intent, normalizedGoalContId);
+  return _postComposerDraftPayload(sid, normalizedDraft, intent, normalizedGoalContId, retainFiles);
 }
 
 // Restore composer draft from server onto #msg textarea.
@@ -2854,7 +2862,7 @@ async function loadSession(sid){
       // #7855 (round 7): the departing session's restored continuation token
       // must travel with the exact text it belongs to, or a return to this
       // session restores an ordinary draft and the retry loses the goal.
-      await _saveComposerDraftNow(currentSid, draftText, draftFiles, _switchContId);
+      await _saveComposerDraftNow(currentSid, draftText, draftFiles, _switchContId, !!opts.retainOutgoingFiles);
     } catch (error) {
       _handleComposerDraftPostFailure(error, currentSid, draftText, draftFiles);
     }
