@@ -53,7 +53,9 @@ async function api(path,opts={}){
             // exponential URL growth on each expired-auth bounce until the tab
             // breaks. On the login page, just reload login WITHOUT a next (the
             // page preserves its own inner next); elsewhere, capture the path.
-            if(redirect401){
+            // Check at response time: a draft clear can start before its send
+            // detaches Files. Login navigation must not destroy retained bytes.
+            if(redirect401&&!(typeof _uploadRecoveries!=='undefined'&&_uploadRecoveries.size)){
               // Already on the login page? Reload login WITHOUT a next.
               const _p=(window.location.pathname||'').replace(/\/+$/,'');
               if(/(?:^|\/)login$/.test(_p)){
