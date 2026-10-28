@@ -52,6 +52,10 @@ mid-navigation. `retainOutgoingFiles` preserves a newer file-bearing draft in th
 existing session-owned local draft intent even after its metadata save succeeds;
 normal send/replace cleanup still owns release. Retry uploads only missing items,
 never sends an incomplete batch, and never replays uncertain chat admission.
+The local draft intent keeps its text-bound goal-continuation token with its
+text and File references, including when departure persistence fails. Restoring
+local text must use that intent's token, never a stale server draft's token;
+replacement and clear supersede the complete intent even across late writes.
 Authentication responses must not unload a page while retained recoveries exist,
 including responses to draft writes started before attachment detachment.
 
