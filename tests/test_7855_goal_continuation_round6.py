@@ -85,7 +85,7 @@ def test_the_save_helper_accepts_and_persists_the_token() -> None:
     )
     # The token reaches the wire through the shared payload helper, whose
     # default-empty / explicit-id argument is what puts it on the body.
-    assert "_postComposerDraftPayload(sid, normalizedDraft, intent, normalizedGoalContId)" in body, (
+    assert "_postComposerDraftPayload(sid, normalizedDraft, intent, normalizedGoalContId, retainFiles)" in body, (
         "the token is accepted but never handed to the payload helper"
     )
     post_body = _js_function(SESSIONS_JS, "function _postComposerDraftPayload(")
