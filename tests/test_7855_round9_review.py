@@ -74,14 +74,19 @@ def test_the_debounced_autosave_sends_the_token_with_its_own_text() -> None:
     start = SESSIONS_JS.find("function _saveComposerDraft(sid, text, files) {")
     end = SESSIONS_JS.find("function _safeDraftSessionId(", start)
     body = SESSIONS_JS[start:end]
-    # The comparison must be inside the timer callback, against the text that
-    # was scheduled — not a live read of the composer.
-    callback = body[body.find("_draftSaveTimer = setTimeout("):]
-    assert "_restoredCont.text" in callback and "normalizedText" in callback, (
+    # Resolve against captured text before storing the complete local intent;
+    # the callback uses that same snapshot, not a live read of the composer.
+    timer_idx = body.find("_draftSaveTimer = setTimeout(")
+    snapshot = body[:timer_idx]
+    callback = body[timer_idx:]
+    assert "_restoredCont.text" in snapshot and "normalizedText" in snapshot, (
         "the autosave does not compare the restored binding's text with the "
         "text being saved, so an edited draft can carry a stale token "
         "(#7855 round 9 MUST-FIX 1 / round-7 CORE)"
     )
+    assert snapshot.index("_restoredCont.text") < snapshot.index(
+        "_setComposerDraftLocalIntent(sid, normalizedText, liveFiles, _autosaveContId)"
+    ), "local intent must retain the resolved text-bound token"
     # And the payload helper must receive the resolved id (possibly empty).
     assert "_postComposerDraftPayload(sid, normalizedDraft, intent, _autosaveContId)" in callback, (
         "the autosave does not hand the resolved continuation id to the "

@@ -9,7 +9,7 @@ import pytest
 ROOT = Path(__file__).resolve().parents[1]
 
 
-@pytest.mark.parametrize("driver,count", [("upload_recovery.cjs", 21), ("first_upload_recovery.cjs", 6)])
+@pytest.mark.parametrize("driver,count", [("upload_recovery.cjs", 21), ("first_upload_recovery.cjs", 7)])
 def test_failed_upload_recovery(driver, count):
     node = shutil.which("node")
     if not node:
