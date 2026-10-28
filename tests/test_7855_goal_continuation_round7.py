@@ -144,7 +144,7 @@ def test_the_session_switch_save_persists_the_token() -> None:
     assert "_saveComposerDraftNow(currentSid" in switch_body, (
         "the session-switch save call site was not found"
     )
-    assert "_saveComposerDraftNow(currentSid, draftText, draftFiles, _switchContId)" in switch_body, (
+    assert "_saveComposerDraftNow(currentSid, draftText, draftFiles, _switchContId, !!opts.retainOutgoingFiles)" in switch_body, (
         "the session-switch save omits the continuation token, so a restored "
         "queued continuation degrades to an ordinary draft on return "
         "(#7855 round-7 CORE)"
@@ -199,10 +199,10 @@ def test_the_signature_pin_matches_the_save_helper() -> None:
     stays red on a file this PR does not otherwise touch."""
     pin_file = REPO_ROOT / "tests" / "test_composer_draft_after_send.py"
     text = pin_file.read_text(encoding="utf-8")
-    assert "function _saveComposerDraftNow(sid, text, files, goalContinuationId)" in text, (
+    assert "function _saveComposerDraftNow(sid, text, files, goalContinuationId, retainFiles=false)" in text, (
         "the signature pin still names the 3-argument form, so the "
         "_block() lookup raises ValueError and shard 4 fails (#7855 round-7 CI)"
     )
-    assert "function _saveComposerDraftNow(sid, text, files, goalContinuationId)" in SESSIONS_JS, (
+    assert "function _saveComposerDraftNow(sid, text, files, goalContinuationId, retainFiles=false)" in SESSIONS_JS, (
         "the save helper's real signature does not match the pin"
     )
