@@ -5,7 +5,8 @@
 
 const LOCALES = {
   en: {
-    upload_recovery_owner: 'Open the original conversation and wait until it is idle to retry.',
+    upload_recovery_opening: 'Opening original conversation…',
+    upload_recovery_owner: 'Switch to the original profile and wait until navigation and the conversation are idle to retry.',
     upload_recovery_unknown: 'Send acknowledgement unknown. Check the conversation before sending again.',
     upload_recovery_uploading: 'Uploading…',
     upload_recovery_sending: 'Sending…',
