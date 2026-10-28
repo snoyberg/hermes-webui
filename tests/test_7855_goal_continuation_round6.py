@@ -122,8 +122,11 @@ def test_the_restore_path_re_marks_the_token() -> None:
         "the restore path does not re-mark the persisted continuation token, "
         "so a reload restores the text and drops the id (#7855 finding 1)"
     )
-    assert "draft.goal_continuation_id" in body, (
-        "the restore path does not read the token out of the stored draft"
+    assert "const tokenDraft = useLocalFallback ? localFallback : draft;" in body, (
+        "the restore path mixes the token's owner with a different text source"
+    )
+    assert "tokenDraft.goal_continuation_id" in body, (
+        "the restore path does not read the token out of the selected draft"
     )
 
 
