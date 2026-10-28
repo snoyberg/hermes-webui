@@ -1397,18 +1397,36 @@ function _releaseUploadRecovery(record){
 }
 function _discardUploadRecovery(id){
   const record=_uploadRecoveries.get(id);
-  if(!record||record.state==='uploading'||record.state==='admitting')return;
+  if(!record||record.state==='opening'||record.state==='uploading'||record.state==='admitting')return;
   _releaseUploadRecovery(record);
 }
 async function _retryUploadRecovery(id){
   const record=_uploadRecoveries.get(id);
   if(!record||record.state!=='failed'||_sendInProgress)return;
+  if((S.activeProfile||(S.session&&S.session.profile)||'default')!==record.profile
+    ||S.busy||(typeof _loadingSessionId!=='undefined'&&_loadingSessionId)
+    ||(typeof _newSessionInFlight!=='undefined'&&_newSessionInFlight)){
+    showToast(t('upload_recovery_owner'),3500);return;
+  }
+  // Empty first-message owners are intentionally absent from the sidebar.
+  // Retry is explicit navigation intent, but never permission to change owner.
+  if(!S.session||S.session.session_id!==record.sid){
+    if(typeof loadSession!=='function'){showToast(t('upload_recovery_owner'),3500);return;}
+    record.state='opening';_renderUploadRecoveries();
+    let opened=false;
+    try{
+      const opening=loadSession(record.sid,{skipLineageResolve:true,skipContinuationResolve:true,skipProfileResolve:true,retainOutgoingFiles:true});
+      const generation=_loadSessionGeneration;
+      await opening;
+      opened=generation===_loadSessionGeneration&&_uploadRecoveryOwnerVisible(record);
+    }catch(_){ /* Keep the original Files on failed navigation. */ }
+    finally{record.state='failed';_renderUploadRecoveries();}
+    if(!opened)return;
+  }
   if(!_uploadRecoveryOwnerVisible(record)||S.busy
     ||S.session.read_only||S.session.is_read_only
-    ||(typeof isCompressionUiRunning==='function'&&isCompressionUiRunning())
-    ||(typeof _newSessionInFlight!=='undefined'&&_newSessionInFlight)){
-    showToast(t('upload_recovery_owner'),3500);
-    return;
+    ||(typeof isCompressionUiRunning==='function'&&isCompressionUiRunning())){
+    showToast(t('upload_recovery_owner'),3500);return;
   }
   return send({uploadRecovery:record,literalSlash:true});
 }
@@ -1423,6 +1441,7 @@ function _renderUploadRecoveries(){
     const uncertain=record.state==='uncertain';
     label.textContent=`${record.title} (${record.profile}): ${record.items.length} ${t('upload_recovery_count')}. `
       +(uncertain?t('upload_recovery_unknown'):
+        record.state==='opening'?t('upload_recovery_opening'):
         record.state==='uploading'?t('upload_recovery_uploading'):record.state==='admitting'?t('upload_recovery_sending'):
         t('upload_recovery_retained'));
     row.append(label);
@@ -1432,7 +1451,7 @@ function _renderUploadRecoveries(){
       retry.onclick=()=>{void _retryUploadRecovery(record.id);};row.append(retry);
     }
     const discard=document.createElement('button');discard.type='button';discard.textContent=t('upload_recovery_discard');
-    discard.disabled=record.state==='uploading'||record.state==='admitting';
+    discard.disabled=record.state==='opening'||record.state==='uploading'||record.state==='admitting';
     discard.onclick=()=>_discardUploadRecovery(record.id);row.append(discard);
     host.append(row);
   }
