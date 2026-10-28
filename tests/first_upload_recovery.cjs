@@ -8,6 +8,67 @@ function between(start,end){return sessions.slice(sessions.indexOf(start),sessio
 function fn(name){const start=sessions.search(new RegExp(`^(?:async )?function ${name}\\(`,'m'));const tail=sessions.slice(start);const end=tail.slice(1).search(/\n(?:async )?function /);assert(start>=0&&end>=0);return tail.slice(0,end+1);}
 const lifecycle=between('let _loadingSessionId = null;','const SESSION_VIEWED_COUNTS_KEY')
   +'\nlet _newSessionInFlight=null;\n'+fn('newSession')+'\n'+fn('loadSession');
+async function checkDraftIntentLifecycle(c,S,input,file){
+  const sid=S.session.session_id;
+  const staleServer={text:'stale server text',files:[],goal_continuation_id:'stale-server-token'};
+  const restore=()=>{
+    input.value='';S.pendingFiles=[];c._clearRestoredGoalContinuationDraft();
+    c._restoreComposerDraft(staleServer,sid);
+  };
+  const refusal=()=>Promise.reject(new Error('synthetic draft refusal'));
+  c.api=refusal;
+  // Autosave snapshots the binding when scheduled, even before the POST runs.
+  input.value='autosaved continuation';S.pendingFiles=[file];
+  c._setRestoredGoalContinuationDraft('autosave-token',input.value);
+  c._saveComposerDraft(sid,input.value,[file]);
+  restore();
+  assert.equal(c._peekRestoredGoalContinuationDraft()?.id,'autosave-token');
+  await new Promise(r=>setTimeout(r,450));
+  restore();assert.equal(c._peekRestoredGoalContinuationDraft()?.id,'autosave-token');
+  assert.equal(S.pendingFiles[0],file);
+  // Editing while the old binding remains must replace, not inherit, its token.
+  input.value='edited ordinary text';
+  c._saveComposerDraft(sid,input.value,[file]);
+  restore();assert.equal(input.value,'edited ordinary text');
+  assert.equal(c._peekRestoredGoalContinuationDraft(),null,'local empty token defeats stale server token');
+  await new Promise(r=>setTimeout(r,450));
+  restore();assert.equal(c._peekRestoredGoalContinuationDraft(),null);
+  // A late successful save cannot retire or resurrect a replaced intent.
+  let release;
+  c.api=()=>new Promise(r=>{release=r;});
+  const oldSave=c._saveComposerDraftNow(sid,'old continuation',[file],'old-token',true);
+  const replacement=c._saveComposerDraftNow(sid,'replacement',[file],'replacement-token',true);
+  release({ok:true});await oldSave;
+  restore();assert.equal(input.value,'replacement');
+  assert.equal(c._peekRestoredGoalContinuationDraft()?.id,'replacement-token');
+  release({ok:true});await replacement;
+  restore();assert.equal(c._peekRestoredGoalContinuationDraft()?.id,'replacement-token');
+  assert.equal(S.pendingFiles[0],file);
+  // Stale navigation and same-session refresh cannot overwrite active input.
+  input.value='active typing';S.pendingFiles=[];
+  c._setRestoredGoalContinuationDraft('active-token',input.value);
+  c._restoreComposerDraft(staleServer,sid,{preserveActiveInput:true});
+  assert.equal(input.value,'active typing');
+  assert.equal(c._peekRestoredGoalContinuationDraft()?.id,'active-token');
+  vm.runInContext("_loadingSessionId='another-session'",c);
+  c._restoreComposerDraft(staleServer,sid);
+  assert.equal(input.value,'active typing');
+  assert.equal(c._peekRestoredGoalContinuationDraft()?.id,'active-token');
+  vm.runInContext('_loadingSessionId=null',c);
+  // Clear supersedes an in-flight save and releases its token and File refs.
+  const pending=c._saveComposerDraftNow(sid,'retiring',[file],'retiring-token',true);
+  const clearing=c._clearComposerDraft(sid,'retiring',[file]);
+  input.value='';S.pendingFiles=[];
+  c._setRestoredGoalContinuationDraft('unrelated-live-token','');
+  c._restoreComposerDraft({text:'',files:[]},sid);
+  assert.equal(c._peekRestoredGoalContinuationDraft(),null,'empty local restore clears binding');
+  release({ok:true});await pending;
+  c._restoreComposerDraft({text:'',files:[]},sid);
+  assert.equal(input.value,'');assert.equal(S.pendingFiles.length,0);
+  assert.equal(c._peekRestoredGoalContinuationDraft(),null);
+  release({ok:true});await clearing;
+  assert.equal(vm.runInContext(`_composerDraftLocalFallbackBySid.has('${sid}')`,c),false);
+}
 async function scenario(name,extra={}){
   let owner,drafts={},savedFiles={},created=0,reads=[];
   return runCase(name,{failure:true,realApi:true,...extra,
@@ -46,6 +107,7 @@ async function scenario(name,extra={}){
           return response({session:{...session}});
         }
         if(url.endsWith('/api/session/draft')){
+          if(extra.draftSaveFailure && body.session_id==='new-2')return {ok:false,status:503,headers:{get:()=> 'application/json'},text:async()=> 'synthetic draft refusal'};
           drafts[body.session_id]={text:body.text,files:body.files,goal_continuation_id:body.goal_continuation_id};
           return response({ok:true,draft:drafts[body.session_id]});
         }
@@ -94,7 +156,9 @@ async function scenario(name,extra={}){
       assert.equal(S.session.session_id,owner);assert.deepEqual(reads,[owner]);
       assert.equal(state.starts[0].session_id,owner);assert.equal(state.starts[0].profile,'fixture');
       assert.equal(state.starts[0].workspace,'fixture-workspace');
-      assert.equal(drafts['new-2'].text,'Newer unrelated draft');assert.equal(drafts['new-2'].files[0].name,second.name);
+      if(!extra.draftSaveFailure){
+        assert.equal(drafts['new-2'].text,'Newer unrelated draft');assert.equal(drafts['new-2'].files[0].name,second.name);
+      }
       if(extra.partial){
         assert.equal(state.starts[0].attachments.length,2);
         assert.equal(state.uploads.filter(u=>u.name===file.name).length,1,'acknowledged file is not uploaded again');
@@ -103,15 +167,17 @@ async function scenario(name,extra={}){
       S.busy=false;await c.loadSession('new-2');
       assert.equal(input.value,'Newer unrelated draft','newer draft survives the round trip');
       assert.equal(S.pendingFiles[0],second,'newer draft retains actual File bytes, not just metadata');
-      assert.equal(c._peekRestoredGoalContinuationDraft().id,'newer-goal-token');
+      assert.equal(c._peekRestoredGoalContinuationDraft()?.id,'newer-goal-token','newer token survives even when departure save fails');
       await c._clearComposerDraft('new-2',input.value,[second]);
       assert.equal(vm.runInContext("_composerDraftLocalFallbackBySid.has('new-2')",c),false,'submit clears retained newer-draft references');
+      if(extra.draftSaveFailure)await checkDraftIntentLifecycle(c,S,input,second);
     },
   });
 }
 (async()=>{
   const cases=[];
   cases.push(await scenario('first-upload-new-chat-retry'));
+  cases.push(await scenario('departure-draft-save-failure',{draftSaveFailure:true}));
   cases.push(await scenario('profile-mismatch',{profileMismatch:true}));
   cases.push(await scenario('missing-owner',{metadataFailure:404}));
   cases.push(await scenario('auth-expired',{metadataFailure:401}));
