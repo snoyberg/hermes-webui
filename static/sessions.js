@@ -64,10 +64,11 @@ const _composerDraftPostPromisesBySid = new Map();
 let _composerDraftIntentSequence = 0;
 const _COMPOSER_DRAFT_RESTORE_SUPPRESS_MS = 30000;
 
-function _setComposerDraftLocalIntent(sid, text, files) {
+function _setComposerDraftLocalIntent(sid, text, files, goalContinuationId='') {
   const intent = Object.freeze({
     text: String(text || ''),
     files: Object.freeze(Array.isArray(files) ? files.filter(Boolean).slice() : []),
+    goal_continuation_id: String(goalContinuationId || '').trim(),
     sequence: ++_composerDraftIntentSequence,
   });
   _composerDraftLocalFallbackBySid.set(sid, intent);
@@ -262,7 +263,6 @@ function _saveComposerDraft(sid, text, files) {
   const liveFiles = Array.isArray(files) ? files.filter(Boolean).slice() : [];
   const normalizedFiles = _composerDraftFilesForPersist(files);
   const normalizedDraft = { text: normalizedText, files: normalizedFiles };
-  const intent = _setComposerDraftLocalIntent(sid, normalizedText, liveFiles);
   if (_composerDraftHasPayload(normalizedText, normalizedFiles)) {
     _clearComposerDraftRestoreSuppression(sid);
     _composerDraftKnownPayloadSessions.add(sid);
@@ -284,12 +284,13 @@ function _saveComposerDraft(sid, text, files) {
   const _restoredCont = (typeof _peekRestoredGoalContinuationDraft === 'function')
     ? _peekRestoredGoalContinuationDraft()
     : null;
+  let _autosaveContId = '';
+  if (_restoredCont && _restoredCont.id
+      && String(_restoredCont.text || '').trim() === String(normalizedText || '').trim()) {
+    _autosaveContId = _restoredCont.id;
+  }
+  const intent = _setComposerDraftLocalIntent(sid, normalizedText, liveFiles, _autosaveContId);
   _draftSaveTimer = setTimeout(() => {
-    let _autosaveContId = '';
-    if (_restoredCont && _restoredCont.id
-        && String(_restoredCont.text || '').trim() === String(normalizedText || '').trim()) {
-      _autosaveContId = _restoredCont.id;
-    }
     _postComposerDraftPayload(sid, normalizedDraft, intent, _autosaveContId).catch((error) => {
       _handleComposerDraftPostFailure(error, sid, normalizedText, liveFiles, intent);
     });
@@ -518,7 +519,7 @@ function _saveComposerDraftNow(sid, text, files, goalContinuationId, retainFiles
       && !_composerDraftLocalFallbackBySid.has(sid)) {
     return Promise.resolve();
   }
-  const intent = _setComposerDraftLocalIntent(sid, normalizedText, liveFiles);
+  const intent = _setComposerDraftLocalIntent(sid, normalizedText, liveFiles, normalizedGoalContId);
   return _postComposerDraftPayload(sid, normalizedDraft, intent, normalizedGoalContId, retainFiles);
 }
 
@@ -575,6 +576,7 @@ function _restoreComposerDraft(draft, targetSid, opts={}) {
   // If there's no text and no files, clear the textarea (a previous session's
   // draft may still be sitting there from a cross-session switch).
   if (!text && !files.length) {
+    if (typeof _clearRestoredGoalContinuationDraft === 'function') _clearRestoredGoalContinuationDraft();
     if (current) {
       ta.value = '';
       if (typeof autoResize === 'function') autoResize();
@@ -593,8 +595,11 @@ function _restoreComposerDraft(draft, targetSid, opts={}) {
   // reload restored the words and left the token on the server, and the retry
   // posted goal_continuation_id: None.
   if (typeof _setRestoredGoalContinuationDraft === 'function') {
-    const _restoredContId = draft && typeof draft.goal_continuation_id === 'string'
-      ? draft.goal_continuation_id.trim()
+    // Text, Files and token share one local intent; server metadata may be stale
+    // when that intent's save failed or was retained for its File references.
+    const tokenDraft = useLocalFallback ? localFallback : draft;
+    const _restoredContId = tokenDraft && typeof tokenDraft.goal_continuation_id === 'string'
+      ? tokenDraft.goal_continuation_id.trim()
       : '';
     if (_restoredContId) {
       _setRestoredGoalContinuationDraft(_restoredContId, text);
