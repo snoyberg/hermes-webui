@@ -59,10 +59,23 @@ Object.assign(window,{
 """
     uploads, starts = [], []
     mode = {"fail": True, "unknown": False}
+    sessions, drafts = {}, {}
 
     def route(request):
         url = request.request.url
-        if url.endswith("/api/upload"):
+        if url.endswith("/api/session/new"):
+            sid = f"fresh-{len(sessions) + 1}"
+            sessions[sid] = {"session_id": sid, "title": "Untitled", "profile": "fixture", "message_count": 0, "messages": []}
+            request.fulfill(content_type="application/json", body=json.dumps({"session": sessions[sid]}))
+        elif url.endswith("/api/session/draft"):
+            body = request.request.post_data_json
+            drafts[body["session_id"]] = body
+            request.fulfill(content_type="application/json", body=json.dumps({"ok": True, "draft": body}))
+        elif "/api/session?" in url:
+            from urllib.parse import parse_qs, urlparse
+            sid = parse_qs(urlparse(url).query)["session_id"][0]
+            request.fulfill(content_type="application/json", body=json.dumps({"session": {**sessions[sid], "composer_draft": drafts.get(sid, {"text": "", "files": []})}}))
+        elif url.endswith("/api/upload"):
             uploads.append(url)
             request.fulfill(status=503 if mode["fail"] else 200, content_type="application/json", body=json.dumps({"filename": "voice.webm", "path": "fixture/voice.webm", "size": 8}))
         elif url.endswith("/api/chat/start"):
@@ -77,6 +90,8 @@ Object.assign(window,{
         browser = p.chromium.launch(headless=True)
         page = browser.new_page(viewport={"width": width, "height": 900}, has_touch=width < 640, is_mobile=width < 640)
         page.route("**/*", route)
+        page_errors = []
+        page.on("pageerror", lambda error: page_errors.append(str(error)))
         page.goto("https://fixture.invalid/")
         page.add_style_tag(content=(ROOT / "static/style.css").read_text())
         page.add_script_tag(content=fixture)
@@ -131,6 +146,51 @@ Object.assign(window,{
         page.screenshot(path=str(tmp_path / f"uncertain-{width}.png"), full_page=True)
         discard.click()
         assert len(starts) == 2
+        # Reproduce the first-message dead end through real creation, draft clear,
+        # completed New Chat and loadSession; only transport/render side effects are fake.
+        session_source = (ROOT / "static/sessions.js").read_text()
+        page.add_script_tag(content=_between(session_source, "let _loadingSessionId = null;", "const SESSION_VIEWED_COUNTS_KEY"))
+        page.add_script_tag(content="let _newSessionInFlight=null;" + _extract_function(session_source, "newSession") + _extract_function(session_source, "loadSession"))
+        page.evaluate("""() => {
+          Object.assign(window,{
+            _activeProject:null,NO_PROJECT_FILTER:'none',_sessionSourceFilter:'all',
+            _messagesTruncated:false,_oldestIdx:0,_loadingOlder:false,_yoloEnabled:false,
+            _setNewSessionPending:noop,_setSessionViewedCount:noop,updateQueueBadge:noop,
+            syncTopbar:noop,_setActiveSessionUrl:noop,loadDir:async()=>{},
+            _rearmActiveSessionStream:noop,_updateYoloPill:noop,hideApprovalCard:noop,
+            _clearSameSessionForceReloadHint:noop,_clearDeferredActiveSessionExternalRefresh:noop,
+            _resolveSessionModelForDisplaySoon:noop,_acknowledgeSessionVisit:noop,
+            _selectLiveRecoveryInflight:()=>null,_mergePendingSessionMessage:noop,
+            _isMessagingSession:()=>false,_hideHandoffHint:noop,
+            _deferWorkspaceRefreshForSession:noop,_ensureMessagesLoaded:async()=>{S.messages=[];},
+            applySessionTitleUpdate:noop
+          });
+          window._clearPendingSelections=noop;
+          S.session=null;S.busy=false;$('msg').value='';
+          S.pendingFiles=[new File(['SYNTHETIC'],'first-voice.webm',{type:'audio/webm'})];
+        }""")
+        mode["fail"], mode["unknown"] = True, False
+        page.evaluate("send()")
+        assert page.evaluate("S.session.session_id") == "fresh-1"
+        assert page.evaluate("_newSessionInFlight") is None
+        assert drafts["fresh-1"]["text"] == ""
+        page.evaluate("newSession(false)")
+        page.evaluate("$('msg').value='Other conversation draft';window.newerFile=new File(['NEWER'],'newer.webm');S.pendingFiles=[window.newerFile]")
+        assert page.evaluate("S.session.session_id") == "fresh-2"
+        page.screenshot(path=str(tmp_path / f"first-message-away-{width}.png"), full_page=True)
+        mode["fail"] = False
+        (retry.tap if width < 640 else retry.click)()
+        try:
+            page.wait_for_function("_uploadRecoveries.size===0", timeout=5000)
+        finally:
+            page.screenshot(path=str(tmp_path / f"first-message-after-retry-{width}.png"), full_page=True)
+        assert starts[-1]["session_id"] == "fresh-1" and starts[-1]["profile"] == "fixture"
+        assert drafts["fresh-2"]["text"] == "Other conversation draft"
+        assert drafts["fresh-2"]["files"][0]["name"] == "newer.webm"
+        page.screenshot(path=str(tmp_path / f"first-message-retried-{width}.png"), full_page=True)
+        page.evaluate("S.busy=false;loadSession('fresh-2')")
+        assert page.locator("#msg").input_value() == "Other conversation draft"
+        assert page.evaluate("S.pendingFiles[0]===window.newerFile")
         # Real loadSession claims navigation before awaiting the source draft
         # write. A later load supersedes the earlier one without changing S yet.
         page.add_script_tag(content=_extract_function((ROOT / "static/sessions.js").read_text(), "loadSession"))
@@ -141,6 +201,7 @@ Object.assign(window,{
             _saveComposerDraftNow:()=>new Promise(resolve=>window.draftReleases.push(resolve))
           });
           window.draftReleases=[];
+          S.session={session_id:'A',profile:'fixture'};
           S.busy=false;S.pendingFiles=[new File(['SYNTHETIC'],'voice.webm')];
         }""")
         mode["fail"], mode["unknown"] = True, False
@@ -151,12 +212,13 @@ Object.assign(window,{
         before = len(uploads)
         mode["fail"] = False
         retry.click()
-        assert len(uploads) == before and len(starts) == 2
+        assert len(uploads) == before and len(starts) == 3
         page.evaluate("draftReleases[0]();navB")
         assert page.evaluate("_loadingSessionId") == "C"
         assert page.evaluate("S.session.session_id") == "A"
         discard.click()
         assert page.evaluate("_uploadRecoveries.size") == 0
         # The pending C draft-write fixture is destroyed with this page only.
+        assert page_errors == []
         browser.close()
     print(f"screenshots: {tmp_path}")
