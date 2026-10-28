@@ -85,7 +85,7 @@ def test_the_save_helper_accepts_and_persists_the_token() -> None:
     )
     # The token reaches the wire through the shared payload helper, whose
     # default-empty / explicit-id argument is what puts it on the body.
-    assert "_postComposerDraftPayload(sid, normalizedDraft, intent, normalizedGoalContId)" in body, (
+    assert "_postComposerDraftPayload(sid, normalizedDraft, intent, normalizedGoalContId, retainFiles)" in body, (
         "the token is accepted but never handed to the payload helper"
     )
     post_body = _js_function(SESSIONS_JS, "function _postComposerDraftPayload(")
@@ -122,8 +122,11 @@ def test_the_restore_path_re_marks_the_token() -> None:
         "the restore path does not re-mark the persisted continuation token, "
         "so a reload restores the text and drops the id (#7855 finding 1)"
     )
-    assert "draft.goal_continuation_id" in body, (
-        "the restore path does not read the token out of the stored draft"
+    assert "const tokenDraft = useLocalFallback ? localFallback : draft;" in body, (
+        "the restore path mixes the token's owner with a different text source"
+    )
+    assert "tokenDraft.goal_continuation_id" in body, (
+        "the restore path does not read the token out of the selected draft"
     )
 
 
