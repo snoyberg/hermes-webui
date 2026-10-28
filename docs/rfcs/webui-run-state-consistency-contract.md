@@ -37,6 +37,29 @@ This RFC defines a consistency contract for those layers. It complements the
 larger run adapter direction in #1925 by documenting what must remain coherent
 while WebUI still has multiple overlapping state stores.
 
+## Failed attachment retry navigation
+
+The browser's `_uploadRecoveries` map owns failed-send File references and upload
+acknowledgements for the lifetime of the page. An empty first-message session is
+intentionally hidden from the sidebar; Retry must therefore be able to reopen its
+exact session ID in the original active profile before retrying. This uses normal
+`loadSession()` draft saving and navigation generations, without lineage,
+continuation or profile substitution. Failed, superseded or still-pending
+navigation must not admit a turn. A missing session is not recreated.
+
+While reopening, the recovery is single-flight (`opening`) and cannot be discarded
+mid-navigation. `retainOutgoingFiles` preserves a newer file-bearing draft in the
+existing session-owned local draft intent even after its metadata save succeeds;
+normal send/replace cleanup still owns release. Retry uploads only missing items,
+never sends an incomplete batch, and never replays uncertain chat admission.
+Authentication responses must not unload a page while retained recoveries exist,
+including responses to draft writes started before attachment detachment.
+
+This is not durable audio storage: reload, tab close, crash or process loss can
+still destroy unsent bytes. No IndexedDB, server staging or persistent audio
+recovery is introduced. The current WebUI execution path remains in place; this
+does not exercise the proposed Hermes run adapter.
+
 ## Agent registration after cancellation
 
 Initial and credential self-heal Agent construction use the same registration
