@@ -1017,6 +1017,28 @@ function _markMessageVirtualMeasurementsSettled(windowMetrics){
   _messageVirtualMeasurementCycleKey=_messageVirtualMeasurementCycleKeyFor(windowMetrics);
   _resetMessageVirtualMeasurementBurst();
 }
+// Identity-only height reuse — the #8228 re-review (2026-10-15) found the
+// fingerprint/digest reuse machinery structurally broken on tool transcripts
+// and costly on every append, and explicitly accepted restoring identity-only
+// matching:
+//   - The tool digest was sealed inside _syncMessageVirtualHeightCache, which
+//     renderMessages calls BEFORE it derives the settled S.toolCalls list. The
+//     first seal hashed settled:null; every later seal hashed the derived item
+//     (carrying assistant_msg_idx / done), so the two never matched — one
+//     mismatching row defeated the all-or-nothing reuse: on a virtualized tool
+//     transcript 0 of 189 heights were kept, and 0 via loadSession(force).
+//   - Sealing ran on every length-change sync even with virtualization off: a
+//     3.6 MB tool-output session paid ~63 ms median per appended message.
+//   - The cached _rfp inverted matching after an in-place mutation: a fresh
+//     object equal to the pre-mutation content was refused, while one equal to
+//     the current (mutated) content reused the height measured for the old
+//     content.
+// Identity-only matching is the pre-PR baseline and is safe in both directions:
+// in-session appends keep the same message objects, so their measured heights
+// carry over; loadSession(force) replaces S.messages with fresh objects, so
+// those rows are re-measured instead of reusing a possibly-stale height (the
+// conservative direction — this is what the review's [SILENT] width/font-size
+// point refers to: identity-only discards rather than risk a wrong height).
 function _messageVirtualHeightEntryMatches(previousEntry, nextEntry){
   return !!(
     previousEntry&&nextEntry&&
@@ -1031,14 +1053,26 @@ function _messageVirtualHeightPrefixEntryMatches(previousEntry, nextEntry){
   );
 }
 function _syncMessageVirtualHeightCache(visWithIdx){
-  const nextEntries=Array.isArray(visWithIdx)
-    ? visWithIdx.map(entry=>entry?{rawIdx:entry.rawIdx,m:entry.m}:entry)
-    : [];
+  const _entryCount=Array.isArray(visWithIdx)?visWithIdx.length:0;
   if(
     _messageVirtualHeightCacheLen===S.messages.length &&
     _messageVirtualHeightCacheSrc===S.messages &&
-    _messageVirtualHeightCacheEntries.length===nextEntries.length
+    _messageVirtualHeightCacheEntries.length===_entryCount
   ) return;
+  // Build the next-entry view only AFTER the early-return above: this function
+  // runs on every render / scroll window recompute, so the no-op check keeps a
+  // steady-state scroll from paying the O(messages) entry build. (nextEntries
+  // length equals visWithIdx length for both arrays and non-arrays, so the
+  // check above is equivalent to the former nextEntries.length test.)
+  // Entries carry the identity only: the #8228 re-review accepted dropping the
+  // sealed tool digest — it was computed before renderMessages derived
+  // S.toolCalls, so the settled state never matched across passes (0/189
+  // heights kept on a virtualized tool transcript) and the per-append walk
+  // cost ~63 ms on large tool sessions. Reuse is decided by message-object
+  // identity alone (see _messageVirtualHeightEntryMatches).
+  const nextEntries=Array.isArray(visWithIdx)
+    ? visWithIdx.map(entry=>entry?{rawIdx:entry.rawIdx,m:entry.m}:entry)
+    : [];
   const previousEntries=Array.isArray(_messageVirtualHeightCacheEntries)?_messageVirtualHeightCacheEntries:[];
   const previousHeights=Array.isArray(_messageVirtualHeightCache)?_messageVirtualHeightCache.slice():[];
   let nextHeights=null;
@@ -1325,10 +1359,85 @@ function _captureMessageViewportAnchor(){
   const container=$('messages');
   if(!container) return null;
   const containerRect=container.getBoundingClientRect();
-  const rows=Array.from(container.querySelectorAll('[data-msg-idx]'));
+  // The fallback scan below reads getBoundingClientRect() once per row just to
+  // find the first row whose bottom edge crosses the container's top edge. On
+  // long transcripts that per-row scan was the hot spot (#7695 measured 18,682
+  // forced synchronous layouts / 21.8s cumulative). Rendered rows stack
+  // vertically in document order, so their bottom edges are monotonic — a
+  // binary search over the RENDERED rows finds the same row in O(log n) rect
+  // reads, with no dependency on the height cache (works identically in
+  // virtualized and full-render modes). An earlier cache-accumulation attempt
+  // was inert as written: estimated heights for rows above the render window
+  // always drifted, the search landed off-anchor, and the correctness gate
+  // then always fell back — a real-browser proof now lives in
+  // tests/browser_virtual_transcript_anchor.py (review finding on #8228).
+  // The per-row scan below stays as the safety net for an empty row set or a
+  // thrown error.
+  // Opt-out: window.__vmFastAnchor=false disables the fast path.
+  try{
+    const _fast=(typeof window==='undefined')||window.__vmFastAnchor!==false;
+    if(_fast){
+      // #8228 CORE: search ONLY the rows that actually lay out. In the default
+      // compact_worklog mode every tool-call assistant message also renders a
+      // hidden `assistant-segment-worklog-source` row (display:none!important —
+      // style.css) that still carries data-msg-idx, and `assistant-segment-anchor`
+      // rows are display:none too. A hidden row's rect is all zeros, so bottom
+      // edges across the FULL [data-msg-idx] set are no longer monotonic and
+      // the binary search lands arbitrarily far from the true anchor
+      // (reproduced in real Chromium: row 539 / 88,424 px below the container
+      // top instead of row 15; mobile virtualization anchored row 127 instead
+      // of visible row 75). Excluding the two hidden classes restores
+      // monotonicity; the fallback scan below uses the SAME predicate so fast
+      // and slow can never disagree about which rows are candidates.
+      const rows=container.querySelectorAll('[data-msg-idx]:not(.assistant-segment-worklog-source):not(.assistant-segment-anchor)');
+      const rowCount=rows?rows.length:0;
+      if(rowCount){
+        // First row with bottom > containerRect.top + 1 — the exact predicate
+        // of the per-row fallback scan below, located in log2(rowCount) reads.
+        let lo=0, hi=rowCount-1, hit=-1;
+        while(lo<=hi){
+          const mid=(lo+hi)>>1;
+          const probeRect=rows[mid].getBoundingClientRect();
+          if(probeRect.bottom>containerRect.top+1){ hit=mid; hi=mid-1; }
+          else { lo=mid+1; }
+        }
+        if(hit>=0){
+          // The binary search assumes laid-out row bottoms are monotonic; the
+          // :not() query restores that for the two display:none classes. As a
+          // defense in depth, if the nearest laid-out previous row ALSO crosses
+          // the container's top edge the hit is not provably the first covering
+          // row, so fall back to the per-row scan below.
+          const predOk=(hit===0)||!(rows[hit-1].getBoundingClientRect().bottom>containerRect.top+1);
+          if(predOk){
+            const row=rows[hit];
+            const rawIdx=Number(row&&row.dataset&&row.dataset.msgIdx);
+            if(Number.isFinite(rawIdx)){
+              // Re-read the HIT row's rect: the search probed midpoints, and
+              // topOffset must describe the returned row itself.
+              const rect=row.getBoundingClientRect();
+              const sessionIdx=Number(row&&row.dataset&&row.dataset.sessionMsgIdx);
+              const spacer=container.querySelector('[data-virtual-spacer="before"]');
+              const topPadBefore=spacer?parseFloat(spacer.style.height||'0')||0:0;
+              return {
+                rawIdx,
+                sessionIdx:Number.isFinite(sessionIdx)?sessionIdx:_messageSessionIndexForRawIdx(rawIdx),
+                key:row&&row.dataset?String(row.dataset.messageAnchorKey||''):'',
+                topOffset:rect.top-containerRect.top,
+                topPadBefore,
+                scrollHeightAtCapture:container.scrollHeight,
+                inputGeneration:typeof _messageScrollInputGeneration==='number' ? _messageScrollInputGeneration : 0,
+              };
+            }
+          }
+        }
+      }
+    }
+  }catch(_e){ /* fast path failed: fall back silently to the original per-row path */ }
+  const rows=Array.from(container.querySelectorAll('[data-msg-idx]:not(.assistant-segment-worklog-source):not(.assistant-segment-anchor)'));
   for(const row of rows){
     const rawIdx=Number(row&&row.dataset&&row.dataset.msgIdx);
     if(!Number.isFinite(rawIdx)) continue;
+    if(typeof window!=='undefined'){window.__vmAnchorFallbackRowReads=(window.__vmAnchorFallbackRowReads||0)+1;}
     const rect=row.getBoundingClientRect();
     if(rect.bottom>containerRect.top+1){
       const sessionIdx=Number(row&&row.dataset&&row.dataset.sessionMsgIdx);
@@ -9189,6 +9298,15 @@ function _transparentEventTimestampSeconds(row, opts){
   }
   if(opts.live===true) return _activityNowSeconds();
   return null;
+}
+function _syncTransparentEventTimestampVisibility(row){
+  const header=row&&row.querySelector('.tool-card-header,.thinking-card-header');
+  if(!header) return;
+  const enabled=!(typeof window!=='undefined'&&window._transparentEventTimestamps===false);
+  // A cache hit with unchanged preferences must remain free of DOM writes.
+  if(!!header.querySelector('.transparent-event-time')!==enabled){
+    _syncTransparentEventTimestamp(row,header,{});
+  }
 }
 function _syncTransparentEventTimestamp(row, header, opts){
   if(!row||!header) return null;
@@ -17366,33 +17484,78 @@ function _anchorSceneWorklogGroup(blocks, opts){
   if(opts&&opts.turnStartedAt!==undefined&&opts.turnStartedAt!==null) group.setAttribute('data-turn-started-at',String(opts.turnStartedAt));
   return group;
 }
+// Tool DOM is expensive and usually immutable while prose streams. Keep the
+// signature on the node, not in a global cache: removing a turn drops its cache,
+// and HTML-restored nodes take the normal build/rehydration path once. Include
+// the full row so in-place result/argument corrections cannot reuse stale HTML.
+function _anchorSceneToolRenderSignature(row, opts){
+  if(!row||row.role!=='tool') return null;
+  return JSON.stringify([row,opts||{},document.documentElement.lang,
+    typeof isSimplifiedToolCalling==='function'&&isSimplifiedToolCalling()]);
+}
+function _anchorSceneDataRowKey(row, streamId){
+  const id=String(row.row_id||row.local_id||'').trim();
+  if(!id) return '';
+  return `${String(streamId||'').trim()}\u0000${id}\u0000${String(row.role||'activity').trim()}\u0000${String(row.source_event_type||'').trim()}`;
+}
+function _anchorScenePlaceChildren(parent, nodes){
+  let next=null;
+  for(let i=nodes.length-1;i>=0;i--){
+    const node=nodes[i];
+    if(node.parentNode!==parent||node.nextSibling!==next) parent.insertBefore(node,next);
+    next=node;
+  }
+  const keep=new Set(nodes);
+  Array.from(parent.children).forEach(node=>{if(!keep.has(node)) node.remove();});
+}
 function _renderAnchorSceneRowsIntoWorklog(group, rows, opts){
   const list=_toolWorklogListEl(group);
   if(!group||!list) return false;
-  list.innerHTML='';
-  let wrote=false;
+  const existing=new Map();
+  list.querySelectorAll('[data-anchor-scene-row="1"]').forEach(node=>{
+    const key=_transparentLiveRowKey(node,'');
+    if(key) existing.set(key,node);
+  });
+  const children=[];
   let currentTools=null;
+  let toolNodes=[];
+  const flushTools=()=>{
+    if(currentTools){
+      const mounted=Array.from(currentTools.querySelectorAll('[data-anchor-row-role="tool"]'));
+      const unchanged=mounted.length===toolNodes.length&&mounted.every((node,i)=>node===toolNodes[i]);
+      if(!unchanged) _anchorScenePlaceChildren(currentTools,toolNodes);
+      currentTools._anchorSceneToolsStable=unchanged;
+    }
+    currentTools=null;
+    toolNodes=[];
+  };
   for(const row of rows){
-    const node=_anchorSceneNodeForRow(row,opts);
+    const key=_anchorSceneDataRowKey(row,'');
+    const previous=key?existing.get(key):null;
+    const signature=_anchorSceneToolRenderSignature(row,opts);
+    const node=signature&&previous&&previous._anchorToolRenderSignature===signature
+      ? previous : _anchorSceneNodeForRow(row,opts);
     if(!node) continue;
+    if(signature) node._anchorToolRenderSignature=signature;
     if(row.role==='tool'){
       if(!currentTools){
-        currentTools=document.createElement('div');
+        const parent=previous&&previous.closest('.wl-step-tools[data-worklog-tools="1"]');
+        currentTools=parent&&parent.parentElement===list&&!children.includes(parent)
+          ? parent : document.createElement('div');
         currentTools.className='wl-step-tools tool-worklog-tools';
         currentTools.setAttribute('data-worklog-tools','1');
-        list.appendChild(currentTools);
+        children.push(currentTools);
       }
-      currentTools.appendChild(node);
+      toolNodes.push(node);
     }else{
-      currentTools=null;
-      list.appendChild(node);
+      flushTools();
+      children.push(node);
     }
-    wrote=true;
   }
-  if(wrote){
-    _syncToolCallGroupSummary(group);
-  }
-  return wrote;
+  flushTools();
+  _anchorScenePlaceChildren(list,children);
+  if(children.length) _syncToolCallGroupSummary(group);
+  return !!children.length;
 }
 function _liveProcessedWorklogAnchorScore(group, index){
   if(!group) return -1;
@@ -17632,8 +17795,22 @@ function renderLiveAnchorActivityScene(streamId, scene, opts){
     : null;
   const scrollSnapshot=_captureMessageScrollSnapshot();
   const scrollRebuildGuard=_prepareLiveAnchorScrollRebuildGuard(scrollSnapshot);
-  blocks.querySelectorAll('[data-anchor-scene-owner="1"],[data-anchor-scene-row="1"]').forEach(el=>el.remove());
-  blocks.querySelectorAll('.live-worklog[data-live-worklog-shell="1"],.tool-worklog-group[data-live-tool-call-group="1"],.tool-call-group[data-live-tool-call-group="1"],.tool-card-row[data-live-tid]:not(.transparent-event-row),.agent-activity-thinking[data-live-thinking="1"],.interim-collapse-toggle').forEach(el=>el.remove());
+  const activityKey=`live:${streamId||S.activeStreamId||'anchor'}`;
+  // The retained group must still be LIVE: an interim_assistant boundary
+  // finalizes the group in place (closeCurrentLiveActivityGroup ->
+  // _finalizeLiveActivityDisclosureGroup strips data-live-tool-call-group and
+  // collapses it) while leaving data-anchor-scene-owner="1". Reusing that
+  // finalized group kept re-rendering into a collapsed, static frame — tools
+  // and later live prose after the boundary never appeared while the turn was
+  // still busy. Requiring the live flag makes the sweep remove the finalized
+  // group so _anchorSceneWorklogGroup builds a fresh live one (#7495 re-gate).
+  const retainedGroup=blocks.querySelector(`.tool-worklog-group[data-anchor-scene-owner="1"][data-live-tool-call-group="1"][data-tool-worklog-key="${CSS.escape(activityKey)}"]`);
+  blocks.querySelectorAll('[data-anchor-scene-owner="1"],[data-anchor-scene-row="1"]').forEach(el=>{
+    if(el!==retainedGroup&&!(retainedGroup&&retainedGroup.contains(el))) el.remove();
+  });
+  blocks.querySelectorAll('.live-worklog[data-live-worklog-shell="1"],.tool-worklog-group[data-live-tool-call-group="1"],.tool-call-group[data-live-tool-call-group="1"],.tool-card-row[data-live-tid]:not(.transparent-event-row),.agent-activity-thinking[data-live-thinking="1"],.interim-collapse-toggle').forEach(el=>{
+    if(el!==retainedGroup&&!(retainedGroup&&retainedGroup.contains(el))) el.remove();
+  });
   blocks.querySelectorAll('[data-live-assistant="1"]').forEach(el=>{
     el.classList.add('assistant-segment-worklog-source');
     el.setAttribute('aria-hidden','true');
@@ -17725,12 +17902,24 @@ function _renderLiveAnchorActivitySceneTransparent(streamId, scene, opts){
   const renderedRows=[];
   for(const row of rows){
     const rowEventTs=typeof _anchorSceneRowTimestampSeconds==='function'?_anchorSceneRowTimestampSeconds(row):null;
-    const node=_anchorSceneTransparentNodeForRow(row,{
+    const rowOpts={
       live:true,
       settled:false,
       streamId:streamId||S.activeStreamId||'',
       sessionId:S.session&&S.session.session_id,
-    });
+    };
+    const signature=_anchorSceneToolRenderSignature(row,rowOpts);
+    const dataKey=_anchorSceneDataRowKey(row,activeStreamId);
+    const cached=dataKey?preserveByKey.get(dataKey):null;
+    if(signature&&cached&&cached._anchorToolRenderSignature===signature){
+      // Timestamp visibility is presentation state, independent of tool content.
+      // Reconcile it in place so toggles preserve disclosure and text selection.
+      _syncTransparentEventTimestampVisibility(cached);
+      preserveByKey.delete(dataKey);
+      renderedRows.push(cached);
+      continue;
+    }
+    const node=_anchorSceneTransparentNodeForRow(row,rowOpts);
     if(!node) continue;
     const key = _transparentLiveRowKey(node, activeStreamId);
     const existing = key ? preserveByKey.get(key) : null;
@@ -17741,13 +17930,18 @@ function _renderLiveAnchorActivitySceneTransparent(streamId, scene, opts){
       : node;
     if(existing) preserveByKey.delete(key);
     if(!renderedNode) continue;
+    if(signature) renderedNode._anchorToolRenderSignature=signature;
     renderedRows.push(renderedNode);
   }
-  const transparentLiveRowAlreadyPositioned=(node, expectedNextSibling)=>!!(
-    node &&
-    node.parentElement===blocks &&
-    node.nextSibling===expectedNextSibling
-  );
+  const transparentLiveRowAlreadyPositioned=(node, expectedNextSibling)=>{
+    if(!node||node.parentElement!==blocks) return false;
+    let next=node.nextSibling;
+    // Streaming may insert a hidden legacy prose anchor between visible rows.
+    // It owns stream metadata, not scene order; moving an unchanged tool past
+    // it needlessly clears selection in Safari/Chromium.
+    while(next&&next.nodeType===1&&next.hidden&&next.getAttribute('data-live-assistant')==='1') next=next.nextSibling;
+    return next===expectedNextSibling;
+  };
   let expectedNextSibling=(liveFooter&&liveFooter.parentElement===blocks) ? liveFooter : null;
   for(let i=renderedRows.length-1;i>=0;i--){
     const renderedNode=renderedRows[i];
@@ -19944,7 +20138,17 @@ window._bindHermesExtensionMessageActions=function(){
 function _addBoundedHash(add, value, depth){
   if(value==null){ add('null'); return; }
   const t=typeof value;
-  if(t==='string'){ add(value.length); add(value); return; }
+  if(t==='string'){
+    add(value.length);
+    // #8228 re-gate (2026-10-20): hash the WHOLE string. An earlier round
+    // sampled only length + head/tail for long `data:` payloads, which made
+    // equal-length strings with an unchanged head/tail and a different MIDDLE
+    // collide — e.g. rendered `data:text/plain,...` message text and tool
+    // payloads, where _sessionHtmlCache then serves stale HTML. The unrendered
+    // native image parts are excluded where they belong, on the message
+    // projection in _addMessageRenderHash, so this shared helper stays exact.
+    add(value); return;
+  }
   if(t==='number'||t==='boolean'){ add(t); add(value); return; }
   if(t==='object'){ _hashObjectInto(add, value, (depth||0)+1); return; }
   add(t); add(String(value));
@@ -19976,6 +20180,40 @@ function _hashObjectInto(add, value, depth){
   for(let i=0;i<keys.length;i++){ add(keys[i]); add(i); _addBoundedHash(add, value[keys[i]], depth); }
 }
 
+// One definition for every render-affecting message property, feeding the
+// session-HTML cache signature (_messageRenderCacheSignature).
+//
+// The former implementation hand-listed fields, and the #8228 review found the
+// list had drifted: `reasoning_content` (the field the row renderer reads
+// FIRST — see _assistantReasoningPayloadText) was never hashed, `_statusCard`
+// stringified to "[object Object]", `_anchor_activity_scene` and the
+// partial-tool argument payloads were missing, and joined tool results were
+// invisible entirely (they live on other messages). A hand list can always
+// drift again the moment the row renderer learns a new field, so this now
+// deep-hashes the ENTIRE message object: every key, array element and nested
+// object, insertion-ordered, through the same bounded, cycle-safe walk
+// (_hashObjectInto) the signature already used for structured payloads.
+// Over-coverage only costs a redundant re-render; under-coverage serves stale
+// HTML from the session cache, so the conservative direction is deliberate.
+function _addMessageRenderHash(add, m){
+  if(!m||typeof m!=='object'){ add('missing'); return; }
+  // #8228 re-gate (2026-10-20): exclude ONLY the native image parts msgContent()
+  // never draws (`image` / `image_url` / `input_image`) — a pasted screenshot
+  // rides on the user message as an `image_url` data URI (api/helpers.py:1593
+  // exempts it from redaction), so hashing it whole cost ~13x per render on a
+  // vision-heavy session (35 ms -> 450 ms on 320 messages with 8 x 1.44 MB
+  // images). The exclusion is a message PROJECTION: a shallow copy with a
+  // filtered content array, never a mutation of the caller's object. Every
+  // other field — including rendered text that happens to start with `data:` —
+  // is hashed in full, so a middle-only edit still changes the signature.
+  const unrendered=p=>!!p&&(p.type==='image'||p.type==='image_url'||p.type==='input_image');
+  if(Array.isArray(m.content)&&m.content.some(unrendered)){
+    _addBoundedHash(add, Object.assign({}, m, {content:m.content.filter(p=>!unrendered(p))}));
+    return;
+  }
+  _addBoundedHash(add, m);
+}
+
 function _messageRenderCacheSignature(){
   let hash=2166136261;
   function add(value){
@@ -19989,32 +20227,17 @@ function _messageRenderCacheSignature(){
   }
   const messages=Array.isArray(S.messages)?S.messages:[];
   add(messages.length);
+  /* The per-message render surface is hashed by _addMessageRenderHash, which
+     deep-hashes the ENTIRE message object — msgContent(m), m.tool_calls,
+     m._partial_tool_calls, reasoning (including reasoning_content), the
+     activity scene, status cards, attachments and content-array parts are all
+     covered, with no hand-maintained field list that can drift (review
+     finding on #8228). One hash per message: the earlier explicit
+     msgContent/tool_calls extractions re-hashed content the object walk
+     already covers, doubling the cost on large tool sessions (371 ms vs
+     135 ms measured on a 3.6 MB transcript — #8228 re-review). */
   for(const m of messages){
-    if(!m||typeof m!=='object'){ add('missing'); continue; }
-    add(m.role);add(m.timestamp);add(m._ts);add(m._error);add(m._statusCard);
-    add(msgContent(m));
-    if(Array.isArray(m.content)){
-      add('content-array');
-      m.content.forEach(part=>{
-        if(!part||typeof part!=='object'){ add(part); return; }
-        add(part.type);add(part.id);add(part.name);add(part.text);add(part.content);
-      });
-    }
-    if(Array.isArray(m.tool_calls)){
-      add('message-tool-calls');add(m.tool_calls.length);
-      m.tool_calls.forEach(tc=>{
-        add(tc&&tc.id);add(tc&&tc.name);add(tc&&tc.type);
-        add(tc&&tc.function&&tc.function.name);
-        // function.arguments is already a string — streamed in full, no copy.
-        _addBoundedHash(add, tc&&tc.function&&tc.function.arguments);
-      });
-    }
-    if(Array.isArray(m._partial_tool_calls)){
-      add('partial-tool-calls');add(m._partial_tool_calls.length);
-      m._partial_tool_calls.forEach(tc=>{add(tc&&tc.id);add(tc&&tc.name);add(tc&&tc.snippet);});
-    }
-    if(_messageHasReasoningPayload(m)) add(m.reasoning||m.thinking||m._reasoning||'reasoning');
-    if(Array.isArray(m.attachments)) m.attachments.forEach(a=>_addBoundedHash(add, a));
+    _addMessageRenderHash(add, m);
   }
   const toolCalls=Array.isArray(S.toolCalls)?S.toolCalls:[];
   add('settled-tool-calls');add(toolCalls.length);
@@ -23527,6 +23750,9 @@ function _toolGroupIcon(rows){
 }
 function _syncToolRowsContainer(tools, isLiveWorklog){
   if(!tools) return;
+  // Scene reconciliation already proved these exact card nodes unchanged.
+  // Do not detach them just to recreate an identical disclosure wrapper.
+  if(tools._anchorSceneToolsStable) return;
   const existingGroup=tools.querySelector(':scope > .tool-worklog-tool-group,:scope > .tool-group[data-tool-worklog-tool-group="1"]');
   const wasOpen=!!(existingGroup&&existingGroup.classList&&existingGroup.classList.contains('open'));
   const rows=_directWorklogToolRows(tools);
