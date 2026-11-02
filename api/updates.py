@@ -2406,15 +2406,17 @@ def _agent_update_status(include_agent=True) -> dict:
     if not include_agent:
         return _ignored_agent_update_info()
     cached = _update_cache.get('agent')
+    from api.native_agent_update import _identity
+    try:
+        owner = _identity()
+    except Exception:
+        owner = None
     if isinstance(cached, dict) and cached.get('native') is True:
-        from api.native_agent_update import _identity
-        try:
-            if cached.get('owner') == _identity():
-                return dict(cached)
-        except Exception:
-            pass
+        if owner is not None and cached.get('owner') == owner:
+            return dict(cached)
     refusal = _agent_maintenance_required()
     return {
+        'owner': owner,
         'name': 'agent',
         'behind': None,
         'status': refusal['status'],
@@ -2489,7 +2491,7 @@ def check_for_updates(force=False, *, include_agent=True, channel=None):
         webui_info = _check_repo(REPO_ROOT, 'webui', channel)
         if include_agent:
             from api.native_agent_update import check
-            agent_info = check()
+            agent_info = check(force=force)
         else:
             agent_info = _ignored_agent_update_info()
 
