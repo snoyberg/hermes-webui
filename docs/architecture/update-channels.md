@@ -1,6 +1,31 @@
 # WebUI update channels
 
-The WebUI updater supports three channels. The setting applies only to the WebUI; Hermes Agent update checks and applies remain channel-neutral.
+The WebUI updater supports three channels. The setting applies only to the WebUI.
+
+## Agent maintenance boundary
+
+Hermes Agent updates belong to the native Agent maintenance workflow, not this
+WebUI's generic Git updater. Until a native action/receipt integration exists,
+Agent checks report `status: native-maintenance-required`, `behind: null` and
+explicit guidance in `error`; this is unknown update availability, not an
+up-to-date verdict. Cached legacy Agent offers are replaced by the same status.
+The opt-out setting continues to return an ignored Agent target.
+
+Agent apply, force and clear-lock return `ok: false` with
+`native_maintenance_required: true` before Git, lock recovery or restart
+admission, including direct combined (`both`) helper requests. HTTP mutation
+routes accept only a single `webui` or `agent` target and continue rejecting
+combined/invalid target shapes. A stale browser offer for both targets tries
+Agent first and stops on refusal, without applying WebUI or claiming completion.
+A new WebUI-only offer remains usable independently.
+
+This is a fail-closed safety boundary, not native widget update integration:
+no native action is started, no channel is changed, and no completion receipt
+is synthesized. Native selection, dependency lifecycle, action ownership and
+matching receipt/reconnect acceptance remain separate work. WebUI-only
+Stable, Experimental and Kaladin updates retain their existing behavior.
+
+## WebUI channels
 
 | Channel | Tag family | Source | Apply behavior |
 | --- | --- | --- | --- |
