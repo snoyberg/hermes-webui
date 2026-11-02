@@ -2980,8 +2980,7 @@ class TestUpdateCompareSource:
         src = read('static/panels.js')
         up_to_date_idx = src.find("settings_up_to_date")
         assert up_to_date_idx != -1, "manual update up-to-date branch not found"
-        block = src[up_to_date_idx:up_to_date_idx + 300]
-        assert "_showUpdateBanner(data,_recoveryGenerationAtCheck)" in block
+        assert "_showUpdateBanner(data,_recoveryGenerationAtCheck)" in src[up_to_date_idx:src.index('// ── Auxiliary Models')]
 
     def test_failed_manual_check_clears_stale_offer_and_actions_before_error(self):
         ui_src = read('static/ui.js')
