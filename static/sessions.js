@@ -2717,6 +2717,11 @@ async function _switchProfileForSessionLoad(profile){
     }
     const data=await api('/api/profile/switch',{method:'POST',body:JSON.stringify({name}),timeoutToast:false});
     S.activeProfile=data.active||name;
+    if(typeof window!=='undefined'){
+      window._nativeAgentView=null;
+      window._nativeAgentResolveGeneration=(window._nativeAgentResolveGeneration||0)+1;
+    }
+    if(typeof _clearUpdateOffer==='function')_clearUpdateOffer();
     S.activeProfileIsDefault=!!data.is_default;
     if(typeof _resetCronUnreadForProfileSwitch==='function'){
       _resetCronUnreadForProfileSwitch();
@@ -2747,6 +2752,7 @@ async function _switchProfileForSessionLoad(profile){
     // gated like the canonical switch's refresh.
     if(typeof _refreshScriptsAfterProfileSwitch==='function') _refreshScriptsAfterProfileSwitch();
     if(typeof renderSessionList==='function') await renderSessionList();
+    if(typeof _resumeNativeAgentUpdate==='function')_resumeNativeAgentUpdate().catch(()=>{});
   }catch(switchErr){
     // The switch POST failed, so we're still on the previous profile and its
     // caches are intact. Clear the up-front skeleton and re-render the real
