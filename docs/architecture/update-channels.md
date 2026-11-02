@@ -4,26 +4,56 @@ The WebUI updater supports three channels. The setting applies only to the WebUI
 
 ## Agent maintenance boundary
 
-Hermes Agent updates belong to the native Agent maintenance workflow, not this
-WebUI's generic Git updater. Until a native action/receipt integration exists,
-Agent checks report `status: native-maintenance-required`, `behind: null` and
-explicit guidance in `error`; this is unknown update availability, not an
-up-to-date verdict. Cached legacy Agent offers are replaced by the same status.
-The opt-out setting continues to return an ignored Agent target.
+Agent checks and ordinary apply use `api/native_agent_update.py`, not the
+WebUI Git updater. A fresh update check calls the existing native
+`GET /api/hermes/update/check` (which may mutate the native source-check cache).
+Cached WebUI GETs do not contact native maintenance. Offers are scoped to the
+exact installation and active profile; WebUI channel selection is never sent to
+Agent. Native `held`, unknown availability and non-applyable guidance are retained.
+The opt-out setting returns an ignored Agent target.
 
-Agent apply, force and clear-lock return `ok: false` with
-`native_maintenance_required: true` before Git, lock recovery or restart
-admission, including direct combined (`both`) helper requests. HTTP mutation
-routes accept only a single `webui` or `agent` target and continue rejecting
-combined/invalid target shapes. A stale browser offer for both targets tries
-Agent first and stops on refusal, without applying WebUI or claiming completion.
-A new WebUI-only offer remains usable independently.
+The server-only bridge identifies an already-running owner through the private
+control socket, validates the existing native endpoint/profile protocol, and
+uses `_session_ticket(..., purpose='native-http')` for each fixed loopback HTTP
+request. It never ensures/starts a gateway, repairs discovery permissions,
+forwards arbitrary URLs/argv, follows redirects, uses proxy environment settings,
+or exposes tickets to the browser, logs or persistent files. Current installation
+proof is deliberately Linux-only: the native client source and owner process cwd
+must both match the configured Agent checkout, and the descriptor must name the
+control home. Unsupported/unverified launch layouts refuse without Git fallback.
+A profile ticket scopes HTTP state; it does not change the installation's update
+subscription or updater process environment.
 
-This is a fail-closed safety boundary, not native widget update integration:
-no native action is started, no channel is changed, and no completion receipt
-is synthesized. Native selection, dependency lifecycle, action ownership and
-matching receipt/reconnect acceptance remain separate work. WebUI-only
-Stable, Experimental and Kaladin updates retain their existing behavior.
+`POST /api/updates/apply` with `target: agent` submits only the existing native
+`POST /api/hermes/update`, with no invented offer/request-id arguments. Its
+`status: accepted` and `action_id` do not mean completion. Duplicates have only
+the native process-local live-action reuse guarantee, not durable idempotency
+across owner restarts. Network/invalid acceptance is non-replayable unknown.
+Force, clear-lock, direct inner Git apply and combined (`both`) helpers remain
+refused; WebUI-only Stable, Experimental and Kaladin behavior is unchanged.
+
+The browser persists only action ID, installation/profile digest and presentation
+state under `hermes-native-agent-action-v1`, before/after submission. A lost
+acceptance with no ID is unknown and cannot be automatically replayed. Reload
+restores tracking, never submission. `POST /api/updates/agent/status` queries the
+existing native latest-action status (`GET /api/actions/hermes-update/status`),
+then compares the native start header/action ID and receipt ID. Only a matching
+receipt certifies `success`, `partial`, `failed` or `refused`; exit zero, process
+absence and another action's latest receipt cannot. A missing bounded log header,
+unavailable history, disconnect or superseding action yields explicit unknown or
+superseded, with manual native inspection rather than hidden retries. Matching
+native follow-ups and user-action guidance remain visible even on success.
+
+For mixed targets the browser waits for matching Agent success before applying
+WebUI. Page restoration does not resume the WebUI mutation. Agent-only completion
+does not automatically restart WebUI: a separate **Reload WebUI separately**
+control calls `/api/updates/agent/reload`, rechecks matching native success and the
+existing WebUI restart blockers, then uses the existing WebUI restart mechanism.
+This is not native certification of WebUI recovery. Accepted policy is deliberate
+human interruption timing, bounded native failure/occasional manual repair and
+healthy-without-WebUI-recovery; no global admission lease, permanent coordinator,
+Agent rollback or coupled release train is added. Independent installation
+observation remains unchanged.
 
 ## WebUI channels
 
