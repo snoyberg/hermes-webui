@@ -7,7 +7,7 @@ const workspace = fs.readFileSync(root+'/static/workspace.js','utf8');
 function extract(src,start,end) { const a=src.indexOf(start); assert(a>=0,start); return src.slice(a,src.indexOf(end,a)); }
 function scene(replies, stored=null) {
   const calls=[],toasts=[],reloads=[];
-  const store=new Map(stored?[['hermes-native-agent-action-v1',JSON.stringify(stored)]]:[]);
+  const store=new Map(stored?[['hermes-native-agent-action-v2:owner',JSON.stringify({...stored,profile:'default',tracking:'restored'})]]:[]);
   const error={style:{},textContent:'',appendChild(){}};
   const button={disabled:false,textContent:''};
   const context={console,URL,AbortController,JSON,Promise,TypeError,Error,
@@ -22,6 +22,7 @@ function scene(replies, stored=null) {
     _readHealthServerIdentity:async()=>'before',_waitForServerThenReload:o=>reloads.push(o),
     _formatUpdateApplyExceptionMessage:e=>e.message,_isUpdateApplyNetworkError:()=>false,
     fetch:async(url,opts)=>{
+      if(new URL(url).pathname==='/api/updates')return {ok:true,headers:{get:()=> 'application/json'},json:async()=>({agent:{owner:'owner'}})};
       calls.push({path:new URL(url).pathname,body:JSON.parse(opts.body),opts});
       const result=replies.shift();
       if(result instanceof Error) throw result;
@@ -61,7 +62,7 @@ function scene(replies, stored=null) {
   await s.context.applyUpdates();
   assert.strictEqual(s.calls.length,1);
   assert.strictEqual(s.reloads.length,0);
-  assert(JSON.parse(s.store.get('hermes-native-agent-action-v1')).status==='unknown');
+  assert(JSON.parse(s.store.get('hermes-native-agent-action-v2:owner')).status==='unknown');
   await s.context.applyUpdates();
   assert.strictEqual(s.calls.length,1,'unknown submission must never replay');
 
@@ -76,6 +77,6 @@ function scene(replies, stored=null) {
   assert.strictEqual(s.calls.length,1,'401 must not retry');
   assert.strictEqual(s.context.location.href,'http://localhost/','401 must not navigate');
   assert.strictEqual(s.reloads.length,0);
-  assert(JSON.parse(s.store.get('hermes-native-agent-action-v1')).status==='unknown');
+  assert(JSON.parse(s.store.get('hermes-native-agent-action-v2:owner')).status==='unknown');
   console.log(JSON.stringify({passed:9,failed:0,realNode:process.version}));
 })().catch(e=>{console.error(e);process.exit(1)});
