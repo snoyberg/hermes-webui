@@ -107,8 +107,8 @@ def test_stale_combined_client_offer_stops_before_webui_apply():
     assert result['apiCalls'] == ['agent']
     assert result['waitCalls'] == []
     assert result['showToasts'] == []
-    assert result['errors'][0]['target'] == 'agent'
-    assert 'Native Agent maintenance' in result['errors'][0]['message']
+    assert result['errors'] == []
+    assert 'Native Agent maintenance' in result['errorText']
     assert result['inFlight'] is False
 
 
