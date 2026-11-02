@@ -3,7 +3,9 @@
 No gateway ensure/discovery fallback, HTTP redirects, proxy environment, retries,
 credential persistence, arbitrary URL or command execution. Importing is inert.
 """
+import ast
 import hashlib
+import os
 import http.client
 import ipaddress
 import json
@@ -39,13 +41,50 @@ def _identity():
     return hashlib.sha256((str(install) + '\0' + str(home)).encode()).hexdigest()
 
 
-def _owner():
-    """Identify only via private read-only queries, never permission-repair discovery.
+def _process_installation(pid, install, control):
+    """Read the native isolated launcher's source binding, never execute argv.
 
-    Linux cwd + the native client's source location pin this bridge to the actual
-    installation. Unsupported or differently-launched owners refuse rather than
-    inferring an installation from a version or a profile ticket.
+    Native services deliberately chdir to their state home. The POSIX launcher
+    and runtime_command instead bind imports with sys.path.insert(0, root).
+    This proves launch provenance, not loaded-version equality after an update.
+    Private peer authentication and native profile/instance grants still apply.
     """
+    proc = Path(f'/proc/{pid}')
+    if proc.stat().st_uid != os.getuid():
+        return False
+    if (proc/'cwd').resolve(strict=True) not in {install, control}:
+        return False
+    with (proc/'cmdline').open('rb') as stream:
+        raw = stream.read(131073)
+    if len(raw) > 131072:
+        return False
+    argv = raw.rstrip(b'\0').decode().split('\0')
+    if len(argv) != 6 or argv[1:3] != ['-I', '-c'] or argv[4:] != ['gateway', 'run']:
+        return False
+    tree = ast.parse(argv[3])
+    roots = []
+    main = False
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom) and node.module == 'hermes_cli.main':
+            main = any(alias.name == 'main' for alias in node.names)
+        if not isinstance(node, ast.Call):
+            continue
+        if (isinstance(node.func, ast.Attribute) and node.func.attr == 'insert'
+                and isinstance(node.func.value, ast.Attribute) and node.func.value.attr == 'path'
+                and isinstance(node.func.value.value, ast.Name) and node.func.value.value.id == 'sys'
+                and len(node.args) == 2 and isinstance(node.args[0], ast.Constant)
+                and node.args[0].value == 0 and isinstance(node.args[1], ast.Constant)
+                and isinstance(node.args[1].value, str)):
+            roots.append(Path(node.args[1].value).resolve())
+        if (isinstance(node.func, ast.Attribute) and node.func.attr == 'run_module'
+                and node.args and isinstance(node.args[0], ast.Constant)
+                and node.args[0].value == 'hermes_cli.main'):
+            main = True
+    return bool(roots and roots[0] == install and main)
+
+
+def _owner():
+    """Identify via private read-only queries and the native launch contract."""
     install, home = _installation()
     if sys.platform != 'linux':
         raise ValueError('installation proof unavailable')
@@ -66,13 +105,13 @@ def _owner():
         pid = payload.get('pid')
         if (type(pid) is not int or pid <= 1 or payload.get('kind') != 'hermes-gateway'
                 or Path(payload.get('hermes_home') or '').resolve() != control
-                or Path(f'/proc/{pid}/cwd').resolve(strict=True) != install):
+                or not _process_installation(pid, install, control)):
             raise ValueError('native installation mismatch')
         return home, endpoint.endpoint
     raise ValueError('native owner unavailable')
 
 
-def _request(operation):
+def _request(operation, *, force=False):
     method, path = _PATHS[operation]  # fixed server-side allowlist
     try:
         home, endpoint = _owner()
@@ -89,6 +128,8 @@ def _request(operation):
     # The grant binds task-local profile scope. Native selectors are names, NOT
     # endpoint.profile_id (a canonical home path). Omit rather than forward it.
     query = {'lines': '2000'} if operation == 'status' else {}
+    if operation == 'check' and force:
+        query['force'] = 'true'
     connection = http.client.HTTPConnection(parsed.hostname, parsed.port, timeout=5)
     try:
         connection.request(method, path + ('?' + urlencode(query) if query else ''),
@@ -110,9 +151,9 @@ def _request(operation):
         connection.close()
 
 
-def check():
+def check(*, force=False):
     try:
-        data = _request('check')
+        data = _request('check', force=force)
         behind = data.get('behind')
         if behind is not None and (type(behind) is not int or behind < -1):
             raise ValueError('invalid behind')
