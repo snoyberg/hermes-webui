@@ -19,6 +19,15 @@ def test_native_update_real_node_flow():
     assert json.loads(result.stdout)['passed'] == 9
 
 
+def test_native_update_real_node_owner_flow():
+    node = shutil.which('node')
+    assert node, 'Node is required for native owner acceptance'
+    result = subprocess.run([node, str(ROOT/'tests/native_agent_owner_flow.cjs'), str(ROOT)],
+                            capture_output=True, text=True, timeout=30)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert json.loads(result.stdout)['passed'] == 8
+
+
 def _between(source, start, end):
     pos = source.index(start)
     return source[pos:source.index(end, pos)]
@@ -57,6 +66,9 @@ function _isUpdateApplyNetworkError(){return false;}
         if path == '/':
             request_route.fulfill(status=200, content_type='text/html', body=html)
             return
+        if path == '/api/updates':
+            request_route.fulfill(status=200, content_type='application/json', body=json.dumps({'agent': {'owner': 'fixture'}}))
+            return
         if path.startswith('/api/'):
             body = request.post_data_json
             calls.append((path, body))
@@ -94,7 +106,7 @@ function _isUpdateApplyNetworkError(){return false;}
         assert len(calls) == 2
         assert page.evaluate('window.waits.length') == 0
         assert page.evaluate('window.toasts.length') == 0
-        assert json.loads(page.evaluate("localStorage.getItem('hermes-native-agent-action-v1')"))['action_id'] == action_id
+        assert json.loads(page.evaluate("localStorage.getItem('hermes-native-agent-action-v2:fixture')"))['action_id'] == action_id
         assert page.locator('#updateError').is_visible()
         assert page.locator('#updateError').bounding_box()['width'] > 80
         out = os.getenv('HERMES_NATIVE_UI_EVIDENCE')
