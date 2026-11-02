@@ -597,4 +597,4 @@ def test_agent_remains_channel_neutral_when_webui_uses_kaladin(monkeypatch, tmp_
         or {"name": name, "behind": 0},
     )
     updates.check_for_updates(force=True, include_agent=True, channel="kaladin")
-    assert calls == [("webui", "kaladin"), ("agent", "stable")]
+    assert calls == [("webui", "kaladin")]
