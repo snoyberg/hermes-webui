@@ -54,6 +54,7 @@ errorEl.appendChild=()=>{};
 
 function $(id) { return dom[id] || null; }
 async function api(url, opts) {
+  if(url==='/api/updates')return {agent:{owner:'owner'}};
   const payload = JSON.parse(opts.body);
   if(payload.target)apiCalls.push(payload.target);
   const res = responses[responseIndex++];
@@ -200,7 +201,7 @@ def test_update_apply_prevents_duplicate_apply_requests_while_in_flight():
     next_fn = src.index("function _showUpdateError", apply_start)
     body = src[apply_start:next_fn]
     assert "window._updateApplyInFlight" in body
-    assert "if(window._updateApplyInFlight) return;" in body
+    assert "window._updateApplyInFlight&&window._updateApplyOwner===applyProfile" in body
     assert "window._updateApplyInFlight=true;" in body
     assert "window._updateApplyInFlight=false;" in body
 
