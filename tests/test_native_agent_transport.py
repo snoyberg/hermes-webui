@@ -13,12 +13,13 @@ import re
 import secrets
 import socketserver
 import sys
+import subprocess
 import tempfile
 import threading
 import time
 import types
 from typing import Any, Optional
-from urllib.parse import urlsplit
+from urllib.parse import parse_qs, urlsplit
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import pytest
@@ -46,7 +47,7 @@ def _module(monkeypatch, name, scope=None):
 
 
 @pytest.fixture
-def transport(monkeypatch):
+def transport(monkeypatch, request):
     source = os.getenv('HERMES_NATIVE_CONTRACT_SOURCE')
     if not source:
         pytest.skip('set HERMES_NATIVE_CONTRACT_SOURCE for real native contract gate')
@@ -55,7 +56,20 @@ def transport(monkeypatch):
     with tempfile.TemporaryDirectory(prefix='n181-', dir=Path.cwd().parent) as directory:
         home = Path(directory)
         home.chmod(0o700)
-        install = Path.cwd().resolve()
+        install = home / 'source'
+        (install/'hermes_cli').mkdir(parents=True)
+        (install/'hermes_bootstrap.py').write_text('')
+        (install/'hermes_cli/__init__.py').write_text('')
+        (install/'hermes_cli/main.py').write_text('import time; time.sleep(120)')
+        launcher = _extract(source/'hermes_cli/_launchers.py',
+                            {'runtime_command', '_inline_string_literal'},
+                            {'Path': Path, 'os': os, 'sys': sys, 'PIN_DEFAULT_HOME_FLAG': '_hermes_pin_default_home'})
+        command = launcher['runtime_command'](install, ['gateway', 'run'], python=sys.executable, home=home)
+        working = _extract(source/'hermes_cli/gateway.py', {'_stable_service_working_dir'},
+                           {'Path': Path, 'get_hermes_home': lambda: home, 'PROJECT_ROOT': install})
+        child = subprocess.Popen(command, cwd=working['_stable_service_working_dir']())
+        assert Path(f'/proc/{child.pid}/cwd').resolve() == home != install
+        request.addfinalizer(lambda: (child.terminate(), child.wait(timeout=5)))
         monkeypatch.setattr(native, '_installation', lambda: (install, home))
         package = _module(monkeypatch, 'hermes_cli', {'__path__': []})
         _module(monkeypatch, 'gateway', {'__path__': []})
@@ -80,7 +94,7 @@ def transport(monkeypatch):
                       for n in c.body if isinstance(n, ast.FunctionDef) and n.name == '_session_ticket')
         exec(compile(ast.Module(body=[method], type_ignores=[]), '<native-ticket-owner>', 'exec'), control_scope)
         owner = types.SimpleNamespace(ticket_store=store)
-        payload = {'pid': os.getpid(), 'kind': 'hermes-gateway', 'hermes_home': str(home),
+        payload = {'pid': child.pid, 'kind': 'hermes-gateway', 'hermes_home': str(home),
                    'runtime_protocol': 1, 'authority_epoch': 1, 'instance_id': 'fixture-owner',
                    'state': 'ready', 'supervisor': 'none', 'capabilities': ['session-authority-v1'],
                    'served_profiles': [{'home': str(home), 'profile_id': str(home)}]}
@@ -125,7 +139,10 @@ def transport(monkeypatch):
                         '_read_latest_receipt': lambda: state['receipt'],
                         '_tail_lines': lambda path, lines: path.read_text().splitlines()[-lines:] if path.exists() else []}
         _module(monkeypatch, 'hermes_cli.update_contract', {'evaluate_update_admission': lambda root: state.get('admission'), 'record_refusal_receipt': lambda value: None})
-        _module(monkeypatch, 'hermes_cli.source_check', {'check_for_updates': lambda **kw: state['source']})
+        def source_check(**kwargs):
+            state.setdefault('source_calls', []).append(kwargs)
+            return state['source']
+        _module(monkeypatch, 'hermes_cli.source_check', {'check_for_updates': source_check})
         _module(monkeypatch, 'hermes_cli.update_receipt', {'read_receipt_for_action': lambda action_id: state['receipt'] if (state['receipt'] or {}).get('action_id') == action_id else None})
         _module(monkeypatch, 'hermes_cli.logs', {'log_file_path': lambda name: home/'update.log'})
         def spawn(argv, name, *, env_overrides):
@@ -163,7 +180,8 @@ def transport(monkeypatch):
                 if self.command == 'POST' and path == '/api/hermes/update':
                     result = asyncio.run(action_scope['update_hermes']())
                 elif path == '/api/hermes/update/check':
-                    result = asyncio.run(action_scope['check_hermes_update']())
+                    force = parse_qs(urlsplit(self.path).query).get('force') == ['true']
+                    result = asyncio.run(action_scope['check_hermes_update'](force=force))
                 elif path == '/api/actions/hermes-update/status':
                     result = asyncio.run(action_scope['get_action_status']('hermes-update', lines=2000))
                 else:
@@ -182,6 +200,21 @@ def transport(monkeypatch):
                 server.shutdown(); server.server_close()
             for thread in threads:
                 thread.join(3)
+
+
+def test_manual_force_reaches_native_source_check_and_cached_get_is_inert(transport, monkeypatch):
+    import api.updates as updates
+    state, issued, _, _ = transport
+    monkeypatch.setattr(updates, '_update_cache', {'agent': None, 'webui': None, 'checked_at': 0})
+    monkeypatch.setattr(updates, '_check_repo', lambda *args: {'name': 'webui', 'behind': 0})
+    assert updates.check_for_updates()['agent']['behind'] == 2
+    assert state['source_calls'][-1]['force'] is False
+    assert updates.check_for_updates(force=True)['agent']['behind'] == 2
+    assert state['source_calls'][-1]['force'] is True
+    assert state['http'] == [('GET', '/api/hermes/update/check'),
+                             ('GET', '/api/hermes/update/check?force=true')]
+    updates.cached_update_status()
+    assert len(issued) == len(state['http']) == 2
 
 
 def test_real_native_ticket_http_check_submit_duplicate_matching_outcome(transport):
@@ -249,13 +282,24 @@ def test_native_install_admission_refusal_is_not_accepted(transport):
     assert 'action_id' not in result and state['posts'] == 0
 
 
-@pytest.mark.parametrize('mutation', ['public-endpoint', 'foreign-profile', 'protocol'])
-def test_owner_identity_refusals_never_mint_ticket(transport, mutation):
-    state, issued, payload, _ = transport
+@pytest.mark.parametrize('mutation', ['public-endpoint', 'foreign-profile', 'protocol',
+                                     'foreign-home', 'foreign-source', 'foreign-process'])
+def test_owner_identity_refusals_never_mint_ticket(transport, mutation, monkeypatch):
+    state, issued, payload, home = transport
     if mutation == 'public-endpoint':
         payload['api_origin'] = 'http://192.0.2.1:9000'
     elif mutation == 'foreign-profile':
         payload['served_profiles'] = [{'profile_id': '/foreign', 'home': '/foreign'}]
+    elif mutation == 'foreign-home':
+        payload['hermes_home'] = str(home/'foreign')
+    elif mutation == 'foreign-source':
+        # Matching client module alone cannot certify a foreign launch root.
+        foreign = home/'foreign'
+        foreign.mkdir()
+        monkeypatch.setattr(native, '_installation', lambda: (foreign, home))
+        monkeypatch.setattr(sys.modules['hermes_cli.gateway_client'], '__file__', str(foreign/'hermes_cli/gateway_client.py'))
+    elif mutation == 'foreign-process':
+        payload['pid'] = os.getpid()
     else:
         payload['runtime_protocol'] = 2
     result = native.submit()
