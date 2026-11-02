@@ -202,6 +202,20 @@ def transport(monkeypatch, request):
                 thread.join(3)
 
 
+def test_root_home_cwd_gateway_serves_named_profile(transport, monkeypatch):
+    state, issued, payload, control = transport
+    profile = control/'profiles'/'named'
+    profile.mkdir(parents=True)
+    install, _ = native._installation()
+    monkeypatch.setattr(native, '_installation', lambda: (install, profile))
+    payload['served_profiles'].append({'home': str(profile), 'profile_id': str(profile)})
+    # Owner discovery only: no ticket or native API request for this layout proof.
+    home, endpoint = native._owner()
+    assert home == profile
+    assert endpoint.profile_id == str(profile)
+    assert issued == [] and state['http'] == []
+
+
 def test_manual_force_reaches_native_source_check_and_cached_get_is_inert(transport, monkeypatch):
     import api.updates as updates
     state, issued, _, _ = transport
