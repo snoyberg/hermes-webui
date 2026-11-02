@@ -14458,12 +14458,40 @@ function _formatUpdateApplyExceptionMessage(error){
   const message=(error&&error.message)||String(error||'unknown error');
   return _i18nUpdateText('update_failed_prefix','Update failed: ')+message;
 }
-function _nativeAgentStored(){
-  try{return JSON.parse(localStorage.getItem('hermes-native-agent-action-v1')||'null');}
+function _nativeAgentStored(owner=window._nativeAgentView?.owner){
+  if(!owner)return null;
+  try{return JSON.parse(localStorage.getItem('hermes-native-agent-action-v2:'+owner)||'null');}
   catch(_){return null;}
 }
-function _nativeAgentSave(action){
-  localStorage.setItem('hermes-native-agent-action-v1',JSON.stringify(action));
+function _nativeAgentSave(action,expected=null){
+  if(!action.owner)return false;
+  if(expected){
+    const current=_nativeAgentStored(action.owner);
+    if(!current||current.tracking!==expected.tracking||current.action_id!==expected.action_id||current.status!==expected.status)return false;
+  }
+  localStorage.setItem('hermes-native-agent-action-v2:'+action.owner,JSON.stringify(action));
+  return true;
+}
+function _nativeAgentProfile(){
+  if((typeof _profileSwitchListEmbargo!=='undefined'&&_profileSwitchListEmbargo)||
+     (typeof _profileSwitchInFlight==='number'&&_profileSwitchInFlight>0))return null;
+  return typeof S==='object'?(S.activeProfile||'default'):'default';
+}
+async function _nativeAgentResolveOwner(){
+  const profile=_nativeAgentProfile();
+  if(!profile)return null;
+  const generation=(window._nativeAgentResolveGeneration||0)+1;
+  window._nativeAgentResolveGeneration=generation;
+  // This cached GET is transport-inert on the server, including before any check.
+  // Do not infer the current installation from an offer left by another profile.
+  const data=await api('/api/updates',{retries:0,redirect401:false,redirect:'error',timeoutToast:false});
+  if(generation!==window._nativeAgentResolveGeneration||!profile||profile!==_nativeAgentProfile()||!data?.agent?.owner)return null;
+  return window._nativeAgentView={owner:data.agent.owner,profile};
+}
+function _nativeAgentCurrent(owned){
+  const current=_nativeAgentStored(owned.owner);
+  return _nativeAgentProfile()===owned.profile&&window._nativeAgentView?.owner===owned.owner&&
+    current?.tracking===owned.tracking&&current?.action_id===owned.action_id&&current?.status===owned.status;
 }
 function _renderNativeAgentOutcome(result){
   const el=$('updateError');
@@ -14490,73 +14518,94 @@ function _renderNativeAgentOutcome(result){
       button.disabled=true;
       try{
         const owned=tracking;
-        if(!owned?.action_id||_nativeAgentStored()?.action_id!==owned.action_id)throw new Error('tracking changed');
+        if(!owned?.action_id||!_nativeAgentCurrent(owned))throw new Error('tracking changed');
         const baselineServerIdentity=await _readHealthServerIdentity();
+        if(!_nativeAgentCurrent(owned))return;
         const res=await api('/api/updates/agent/reload',{method:'POST',body:JSON.stringify({action_id:owned.action_id,owner:owned.owner}),retries:0,redirect401:false,redirect:'error'});
+        if(!_nativeAgentCurrent(owned))return;
         if(res?.ok&&res.restart_scheduled)_waitForServerThenReload({baselineServerIdentity});
         else _renderNativeAgentOutcome({status:'unknown',message:res?.message||'WebUI reload not confirmed. No automatic retry.'});
-      }catch(_){_renderNativeAgentOutcome({status:'unknown',message:'WebUI reload unknown; inspect the server. No automatic retry.'});}
+      }catch(_){if(tracking&&_nativeAgentCurrent(tracking))_renderNativeAgentOutcome({status:'unknown',message:'WebUI reload unknown; inspect the server. No automatic retry.'});}
       finally{button.disabled=false;}
     });
     el.appendChild(button);
   }
 }
 async function _pollNativeAgentUpdate(owned){
+  const superseded={status:'superseded',message:'Tracking owner changed; no action was replayed.'};
   for(let attempt=0;attempt<90;attempt++){
+    if(!_nativeAgentCurrent(owned))return superseded;
     let result;
     try{
       result=await api('/api/updates/agent/status',{method:'POST',body:JSON.stringify({action_id:owned.action_id,owner:owned.owner}),retries:0,redirect401:false,redirect:'error',timeoutToast:false});
       if(!result||result.action_id!==owned.action_id)throw new Error('unmatched result');
     }catch(_){result={status:'unknown',action_id:owned.action_id,message:'Native outcome unknown after disconnect. Check status again; never replay the action.'};}
-    owned={...owned,status:result.status};
-    _nativeAgentSave(owned);
+    const next={...owned,status:result.status};
+    if(!_nativeAgentCurrent(owned)||!_nativeAgentSave(next,owned))return superseded;
+    owned=next;
     _renderNativeAgentOutcome(result);
     if(result.status!=='running'&&result.status!=='accepted')return result;
     await new Promise(resolve=>setTimeout(resolve,2000));
   }
   const result={status:'unknown',action_id:owned.action_id,message:'Native outcome not yet known. Check status again; no action was replayed.'};
-  _nativeAgentSave({...owned,status:'unknown'});
+  if(!_nativeAgentCurrent(owned)||!_nativeAgentSave({...owned,status:'unknown'},owned))return superseded;
   _renderNativeAgentOutcome(result);
   return result;
 }
-async function _resumeNativeAgentUpdate(){
-  if(window._nativeAgentPollInFlight)return null;
-  const owned=_nativeAgentStored();
-  if(!owned)return null;
+async function _resumeNativeAgentUpdate(scope=null){
+  scope=scope||await _nativeAgentResolveOwner();
+  if(!scope)return null;
+  const owned=_nativeAgentStored(scope.owner);
+  if(!owned){
+    if(localStorage.getItem('hermes-native-agent-action-v1'))_renderNativeAgentOutcome({status:'unknown',message:'Unscoped legacy native tracking retained. Inspect native maintenance for its outcome; it will not be replayed or assigned to this installation.'});
+    return null;
+  }
   if(!owned.action_id){
     const result={status:'unknown',message:'Prior native submission has no accepted action ID. Inspect native maintenance; no automatic retry.'};
-    _renderNativeAgentOutcome(result);return result;
+    if(_nativeAgentCurrent(owned))_renderNativeAgentOutcome(result);return result;
   }
-  window._nativeAgentPollInFlight=true;
+  const polls=window._nativeAgentPolls||(window._nativeAgentPolls=new Set());
+  if(polls.has(scope.owner))return null;
+  polls.add(scope.owner);
   try{return await _pollNativeAgentUpdate(owned);}
-  finally{window._nativeAgentPollInFlight=false;}
+  finally{polls.delete(scope.owner);}
 }
 async function _submitNativeAgentUpdate(){
-  const previous=_nativeAgentStored();
-  if(previous&&!['success','partial','failed','refused','native-maintenance-required'].includes(previous.status))return _resumeNativeAgentUpdate();
-  // Persist uncertainty BEFORE the consumptive request. Reload cannot replay it.
-  _nativeAgentSave({status:'submitting'});
+  const scope=await _nativeAgentResolveOwner();
+  if(!scope||scope.profile!==_nativeAgentProfile()||window._nativeAgentView?.owner!==scope.owner)return {status:'unknown',message:'Current native installation identity unavailable. No action sent.'};
+  const previous=_nativeAgentStored(scope.owner);
+  if(previous&&!['success','partial','failed','refused','native-maintenance-required'].includes(previous.status))return _resumeNativeAgentUpdate(scope);
+  // Persist uncertainty and its owner BEFORE the consumptive request.
+  const owned={...scope,tracking:Date.now()+':'+Math.random(),status:'submitting'};
+  _nativeAgentSave(owned);
   let accepted;
   try{
     accepted=await api('/api/updates/apply',{method:'POST',body:JSON.stringify({target:'agent'}),retries:0,redirect401:false,redirect:'error',timeoutToast:false});
   }catch(_){accepted={ok:false,status:'unknown',message:'Native acceptance unknown after disconnect. Do not retry automatically.'};}
-  if(accepted?.status!=='accepted'||!accepted.action_id||!accepted.owner){
-    const result=accepted||{status:'unknown',message:'Native acceptance unknown. No automatic retry.'};
-    _nativeAgentSave({status:result.status||'unknown'});
-    _renderNativeAgentOutcome(result);return result;
+  if(accepted?.status==='accepted'&&accepted.action_id&&accepted.owner===owned.owner){
+    const next={...owned,...accepted};
+    if(!_nativeAgentSave(next,owned)||!_nativeAgentCurrent(next))return {status:'superseded'};
+    _renderNativeAgentOutcome(accepted);
+    return _pollNativeAgentUpdate(next);
   }
-  _nativeAgentSave(accepted);
-  _renderNativeAgentOutcome(accepted);
-  return _pollNativeAgentUpdate(accepted);
+  const result=accepted?.status==='accepted'?{status:'unknown',message:'Native acceptance owner mismatch. No automatic retry.'}:
+    accepted||{status:'unknown',message:'Native acceptance unknown. No automatic retry.'};
+  const next={...owned,status:result.status||'unknown'};
+  if(_nativeAgentSave(next,owned)&&_nativeAgentCurrent(next))_renderNativeAgentOutcome(result);
+  return _nativeAgentCurrent(next)?result:{status:'superseded'};
 }
 async function applyUpdates(){
-  if(window._updateApplyInFlight) return;
+  const applyProfile=_nativeAgentProfile();
+  if(!applyProfile||(window._updateApplyInFlight&&window._updateApplyOwner===applyProfile)) return;
   window._updateApplyInFlight=true;
+  window._updateApplyOwner=applyProfile;
   const updateText=(key,fallback)=>(typeof _i18nUpdateText==='function'?_i18nUpdateText(key,fallback):fallback);
   const btn=$('btnApplyUpdate');
   const resetApplyButton=(delayMs)=>{
     const reset=()=>{
+      if(window._updateApplyOwner!==applyProfile)return;
       window._updateApplyInFlight=false;
+      if(applyProfile!==_nativeAgentProfile())return;
       if(btn){btn.disabled=false;btn.textContent=updateText('update_now','Update Now');}
     };
     if(delayMs>0) setTimeout(reset,delayMs);
@@ -14582,6 +14631,7 @@ async function applyUpdates(){
   try{
     const stashConflictMessages=[];
     const baselineServerIdentity = await _readHealthServerIdentity();
+    if(applyProfile!==_nativeAgentProfile()){resetApplyButton(0);return;}
     for(const target of targets){
       // Send the channel the CHECK reported for this target (what was actually
       // offered in the banner), not a fresh settings read — otherwise a channel
@@ -14592,7 +14642,9 @@ async function applyUpdates(){
       const _ch=window._updateData?.[target]?.channel;
       if(['stable','experimental','kaladin'].includes(_ch)) _applyBody.channel=_ch;
       const res=target==='agent'?await _submitNativeAgentUpdate():await api('/api/updates/apply',{method:'POST',body:JSON.stringify(_applyBody),timeoutMs:120000});
+      if(applyProfile!==_nativeAgentProfile()){resetApplyButton(0);return;}
       if(target==='agent'){
+        if(res?.status==='superseded'){resetApplyButton(0);return;}
         if(res?.status!=='success'){
           _renderNativeAgentOutcome(res||{status:'unknown'});
           resetApplyButton(0);return;
@@ -14617,6 +14669,7 @@ async function applyUpdates(){
     sessionStorage.removeItem('hermes-update-dismissed');
     _waitForServerThenReload({baselineServerIdentity});
   }catch(e){
+    if(applyProfile!==_nativeAgentProfile()){resetApplyButton(0);return;}
     const msg=_formatUpdateApplyExceptionMessage(e);
     if(errEl){errEl.textContent=msg;errEl.style.display='block';}
     else showToast(msg);

@@ -4312,8 +4312,7 @@ window._mirrorSpeechSettingsFromServer=_mirrorSpeechSettingsFromServer;
     _applyComposerFooterVisibilitySettings();
     if(typeof _applyTtsEnabled==='function') _applyTtsEnabled(localStorage.getItem('hermes-tts-enabled')==='true');
   }
-  // Restoring tracking only reads a matching native outcome; it never submits.
-  if(typeof _resumeNativeAgentUpdate==='function')_resumeNativeAgentUpdate().catch(()=>{});
+  // Restoring tracking runs only after the active profile has resolved.
   // Non-blocking update check (fire-and-forget, once per tab session)
   // ?test_updates=1 in URL forces banner display for testing (bypasses sessionStorage guards)
   const _testUpdates=new URLSearchParams(location.search).get('test_updates')==='1';
@@ -4413,6 +4412,7 @@ window._mirrorSpeechSettingsFromServer=_mirrorSpeechSettingsFromServer;
   if (activeProfileState.status === 'recovery-redirect') return;
   S.activeProfile = activeProfileState.profile;
   S.activeProfileIsDefault = activeProfileState.isDefault;
+  if(typeof _resumeNativeAgentUpdate==='function')_resumeNativeAgentUpdate().catch(()=>{});
   applyBotName();
   // Update profile chip label immediately
   const profileLabel=$('profileChipLabel');
