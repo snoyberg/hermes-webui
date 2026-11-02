@@ -14372,6 +14372,7 @@ async function refreshSession() {
 }
 // ── Update banner ──
 function _formatUpdateTargetStatus(label,info){
+  if(info?.native&&info.update_available&&!info.error)return `${label}: native update (${info.channel||'installation channel'})`;
   const manualNoGit=!!(info&&info.no_git&&info.manual_update&&info.behind>0);
   if(!info||info.error||info.stale_check||(info.no_git&&!manualNoGit)||!(info.behind>0)) return null;
   const release=(info.release_based&&info.latest_version)
@@ -14712,7 +14713,7 @@ function _showUpdateBanner(data,recoveryGenerationAtCheck=null){
   if(btnApply){
     const webuiManual=!!(data&&data.webui&&data.webui.manual_update&&data.webui.behind>0);
     const webuiUpdatable=!!(data&&data.webui&&!data.webui.error&&!data.webui.stale_check&&data.webui.behind>0&&!webuiManual);
-    const agentUpdatable=!!(data&&data.agent&&!data.agent.error&&!data.agent.stale_check&&data.agent.behind>0);
+    const agentUpdatable=!!(data&&data.agent&&!data.agent.error&&!data.agent.stale_check&&(data.agent.native?(data.agent.update_available&&data.agent.can_apply):data.agent.behind>0));
     const hasApplyTargets=webuiUpdatable||agentUpdatable;
     btnApply.disabled=!hasApplyTargets;
     btnApply.style.display=hasApplyTargets?'':'none';
@@ -14773,6 +14774,97 @@ function _formatUpdateApplyExceptionMessage(error){
   const message=(error&&error.message)||String(error||'unknown error');
   return _i18nUpdateText('update_failed_prefix','Update failed: ')+message;
 }
+function _nativeAgentStored(){
+  try{return JSON.parse(localStorage.getItem('hermes-native-agent-action-v1')||'null');}
+  catch(_){return null;}
+}
+function _nativeAgentSave(action){
+  localStorage.setItem('hermes-native-agent-action-v1',JSON.stringify(action));
+}
+function _renderNativeAgentOutcome(result){
+  const el=$('updateError');
+  if(!el)return;
+  const followups=Array.isArray(result.followups)?result.followups:[];
+  el.textContent='Agent: '+result.status+'. '+(result.message||'')+
+    followups.map(f=>'\nFollow-up: '+f.step+' — '+f.reason).join('')+
+    (result.user_action?'\nNative guidance: '+JSON.stringify(result.user_action):'');
+  el.style.display='block';el.style.whiteSpace='pre-line';
+  el.style.color=result.status==='success'?(followups.length?'var(--warning)':'var(--success)'):'var(--error)';
+  el.setAttribute?.('role','status');
+  $('updateBanner')?.classList.add('visible');
+  const tracking=_nativeAgentStored();
+  if((result.status==='unknown'||result.status==='superseded')&&tracking?.action_id){
+    const check=document.createElement('button');
+    check.type='button';check.className='update-btn';check.textContent='Check native outcome (no retry)';
+    check.addEventListener('click',()=>_resumeNativeAgentUpdate());el.appendChild(check);
+  }
+  if(result.status==='success'){
+    const button=document.createElement('button');
+    button.type='button';button.className='update-btn';button.textContent='Reload WebUI separately';
+    button.style.display='block';button.style.marginTop='6px';
+    button.addEventListener('click',async()=>{
+      button.disabled=true;
+      try{
+        const owned=tracking;
+        if(!owned?.action_id||_nativeAgentStored()?.action_id!==owned.action_id)throw new Error('tracking changed');
+        const baselineServerIdentity=await _readHealthServerIdentity();
+        const res=await api('/api/updates/agent/reload',{method:'POST',body:JSON.stringify({action_id:owned.action_id,owner:owned.owner}),retries:0,redirect401:false,redirect:'error'});
+        if(res?.ok&&res.restart_scheduled)_waitForServerThenReload({baselineServerIdentity});
+        else _renderNativeAgentOutcome({status:'unknown',message:res?.message||'WebUI reload not confirmed. No automatic retry.'});
+      }catch(_){_renderNativeAgentOutcome({status:'unknown',message:'WebUI reload unknown; inspect the server. No automatic retry.'});}
+      finally{button.disabled=false;}
+    });
+    el.appendChild(button);
+  }
+}
+async function _pollNativeAgentUpdate(owned){
+  for(let attempt=0;attempt<90;attempt++){
+    let result;
+    try{
+      result=await api('/api/updates/agent/status',{method:'POST',body:JSON.stringify({action_id:owned.action_id,owner:owned.owner}),retries:0,redirect401:false,redirect:'error',timeoutToast:false});
+      if(!result||result.action_id!==owned.action_id)throw new Error('unmatched result');
+    }catch(_){result={status:'unknown',action_id:owned.action_id,message:'Native outcome unknown after disconnect. Check status again; never replay the action.'};}
+    owned={...owned,status:result.status};
+    _nativeAgentSave(owned);
+    _renderNativeAgentOutcome(result);
+    if(result.status!=='running'&&result.status!=='accepted')return result;
+    await new Promise(resolve=>setTimeout(resolve,2000));
+  }
+  const result={status:'unknown',action_id:owned.action_id,message:'Native outcome not yet known. Check status again; no action was replayed.'};
+  _nativeAgentSave({...owned,status:'unknown'});
+  _renderNativeAgentOutcome(result);
+  return result;
+}
+async function _resumeNativeAgentUpdate(){
+  if(window._nativeAgentPollInFlight)return null;
+  const owned=_nativeAgentStored();
+  if(!owned)return null;
+  if(!owned.action_id){
+    const result={status:'unknown',message:'Prior native submission has no accepted action ID. Inspect native maintenance; no automatic retry.'};
+    _renderNativeAgentOutcome(result);return result;
+  }
+  window._nativeAgentPollInFlight=true;
+  try{return await _pollNativeAgentUpdate(owned);}
+  finally{window._nativeAgentPollInFlight=false;}
+}
+async function _submitNativeAgentUpdate(){
+  const previous=_nativeAgentStored();
+  if(previous&&!['success','partial','failed','refused','native-maintenance-required'].includes(previous.status))return _resumeNativeAgentUpdate();
+  // Persist uncertainty BEFORE the consumptive request. Reload cannot replay it.
+  _nativeAgentSave({status:'submitting'});
+  let accepted;
+  try{
+    accepted=await api('/api/updates/apply',{method:'POST',body:JSON.stringify({target:'agent'}),retries:0,redirect401:false,redirect:'error',timeoutToast:false});
+  }catch(_){accepted={ok:false,status:'unknown',message:'Native acceptance unknown after disconnect. Do not retry automatically.'};}
+  if(accepted?.status!=='accepted'||!accepted.action_id||!accepted.owner){
+    const result=accepted||{status:'unknown',message:'Native acceptance unknown. No automatic retry.'};
+    _nativeAgentSave({status:result.status||'unknown'});
+    _renderNativeAgentOutcome(result);return result;
+  }
+  _nativeAgentSave(accepted);
+  _renderNativeAgentOutcome(accepted);
+  return _pollNativeAgentUpdate(accepted);
+}
 async function applyUpdates(opts){
   if(window._updateApplyInFlight) return;
   window._updateApplyInFlight=true;
@@ -14797,7 +14889,7 @@ async function applyUpdates(opts){
   const forceBtnReset=$('btnForceUpdate');
   if(forceBtnReset){forceBtnReset.style.display='none';forceBtnReset.dataset.target='';}
   const targets=[];
-  if(window._updateData?.agent?.behind>0&&!window._updateData?.agent?.error&&!window._updateData?.agent?.stale_check) targets.push('agent');
+  if(window._updateData?.agent&&(window._updateData.agent.native?(window._updateData.agent.update_available&&window._updateData.agent.can_apply):window._updateData.agent.behind>0)&&!window._updateData.agent.error&&!window._updateData.agent.stale_check) targets.push('agent');
   if(window._updateData?.webui?.behind>0&&!window._updateData?.webui?.error&&!window._updateData?.webui?.stale_check&&!window._updateData?.webui?.manual_update) targets.push('webui');
   if(!targets.length){
     const msg=updateText('update_no_target','No update target selected. Refresh update status and retry.');
@@ -14819,7 +14911,16 @@ async function applyUpdates(opts){
       const _ch=window._updateData?.[target]?.channel;
       if(['stable','experimental','kaladin'].includes(_ch)) _applyBody.channel=_ch;
       if(forceActiveRuns) _applyBody.force_active_runs=true;
-      const res=await api('/api/updates/apply',{method:'POST',body:JSON.stringify(_applyBody),timeoutMs:120000});
+      const res=target==='agent'?await _submitNativeAgentUpdate():await api('/api/updates/apply',{method:'POST',body:JSON.stringify(_applyBody),timeoutMs:120000});
+      if(target==='agent'){
+        if(res?.status!=='success'){
+          _renderNativeAgentOutcome(res||{status:'unknown'});
+          resetApplyButton(0);return;
+        }
+        window._updateData.agent={...window._updateData.agent,behind:0,update_available:false};
+        if(targets.length===1){resetApplyButton(0);if(btn){btn.disabled=true;btn.textContent='Native update complete';}return;}
+        continue;
+      }
       if(!res.ok){
         _showUpdateError(target,res);
         if(res.restart_blocked&&res.force_available){
