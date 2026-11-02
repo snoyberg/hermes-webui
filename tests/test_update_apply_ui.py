@@ -25,7 +25,7 @@ const updateData = JSON.parse(process.argv[1]);
 const responses = JSON.parse(process.argv[2]);
 const uiPath = process.argv[3];
 const src = fs.readFileSync(uiPath, 'utf8');
-const start = src.indexOf('async function applyUpdates()');
+const start = src.indexOf('function _nativeAgentStored(');
 const end = src.indexOf('function _showUpdateError', start);
 const snippet = src.slice(start, end);
 
@@ -46,12 +46,17 @@ const apiCalls = [];
 const waitCalls = [];
 const errors = [];
 let readHealthCalls = 0;
+let responseIndex = 0;
+const store = new Map();
+global.localStorage={getItem:key=>store.get(key)||null,setItem:(key,value)=>store.set(key,value)};
+global.document={createElement:()=>({addEventListener(){},style:{}})};
+errorEl.appendChild=()=>{};
 
 function $(id) { return dom[id] || null; }
 async function api(url, opts) {
   const payload = JSON.parse(opts.body);
-  apiCalls.push(payload.target);
-  const res = responses[apiCalls.length - 1];
+  if(payload.target)apiCalls.push(payload.target);
+  const res = responses[responseIndex++];
   if (res.throwMessage) throw new Error(res.throwMessage);
   return res;
 }
@@ -216,7 +221,8 @@ def test_update_apply_rejects_zero_target_success_path():
 def test_apply_updates_queues_agent_before_webui():
     result = _run_apply_updates_harness(
         {"agent": {"behind": 1}, "webui": {"behind": 1}},
-        [{"ok": True}, {"ok": True}],
+        [{"ok": True, "status": "accepted", "action_id": "a"*32, "owner": "owner"},
+         {"ok": True, "status": "success", "action_id": "a"*32}, {"ok": True}],
     )
     assert result["apiCalls"] == ["agent", "webui"]
     assert result["waitCalls"] == [
@@ -230,7 +236,8 @@ def test_apply_updates_queues_agent_before_webui():
 def test_apply_updates_wait_for_all_targets_before_reload():
     result = _run_apply_updates_harness(
         {"agent": {"behind": 1}, "webui": {"behind": 1}},
-        [{"ok": True}, {"ok": False, "message": "webui failed"}],
+        [{"ok": True, "status": "accepted", "action_id": "a"*32, "owner": "owner"},
+         {"ok": True, "status": "success", "action_id": "a"*32}, {"ok": False, "message": "webui failed"}],
     )
     assert result["apiCalls"] == ["agent", "webui"]
     assert result["waitCalls"] == []

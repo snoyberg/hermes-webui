@@ -2124,8 +2124,8 @@ def _is_dirty(path: Path, timeout: int = 1, *, trusted: bool = False) -> bool:
 def _agent_maintenance_required(target='agent') -> dict:
     """The generic Git updater cannot own the native Agent update lifecycle."""
     message = (
-        'Native Agent maintenance is required. This WebUI cannot perform '
-        'Agent updates or recovery; use the native Agent maintenance workflow. '
+        'Native Agent maintenance is required. This operation cannot perform '
+        'Agent Git updates or recovery; use the ordinary native Agent update action. '
         'No update or restart was started.'
     )
     return {
@@ -2140,6 +2140,14 @@ def _agent_maintenance_required(target='agent') -> dict:
 def _agent_update_status(include_agent=True) -> dict:
     if not include_agent:
         return _ignored_agent_update_info()
+    cached = _update_cache.get('agent')
+    if isinstance(cached, dict) and cached.get('native') is True:
+        from api.native_agent_update import _identity
+        try:
+            if cached.get('owner') == _identity():
+                return dict(cached)
+        except Exception:
+            pass
     refusal = _agent_maintenance_required()
     return {
         'name': 'agent',
@@ -2214,7 +2222,11 @@ def check_for_updates(force=False, *, include_agent=True, channel=None):
     try:
         # Run checks outside the lock (network I/O)
         webui_info = _check_repo(REPO_ROOT, 'webui', channel)
-        agent_info = _agent_update_status(include_agent)
+        if include_agent:
+            from api.native_agent_update import check
+            agent_info = check()
+        else:
+            agent_info = _ignored_agent_update_info()
 
         with _cache_lock:
             _update_cache['webui'] = webui_info
@@ -2982,8 +2994,11 @@ def apply_force_update(target: str, channel=None) -> dict:
 
 
 def apply_update(target, channel=None):
-    """Stash, fast-forward to the selected ref, and restore local changes."""
-    if target in ('agent', 'both'):
+    """Apply WebUI Git updates or submit an existing native Agent action."""
+    if target == 'agent':
+        from api.native_agent_update import submit
+        return submit()
+    if target == 'both':
         return _agent_maintenance_required(target)
     if channel is None:
         channel = _read_update_channel()
