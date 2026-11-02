@@ -455,6 +455,8 @@ def apply_clear_lock(target: str, *, force_active_runs: bool = False) -> dict:
         (now that the lock is gone) will take the success branch and
         re-run the normal apply.
     """
+    if target in ('agent', 'both'):
+        return _agent_maintenance_required(target)
     return _run_fenced_update(
         target, force_active_runs, lambda: _apply_clear_lock_inner(target)
     )
@@ -2384,6 +2386,36 @@ def _is_dirty(path: Path, timeout: int = 1, *, trusted: bool = False) -> bool:
     ) is True
 
 
+def _agent_maintenance_required(target='agent') -> dict:
+    """The generic Git updater cannot own the native Agent update lifecycle."""
+    message = (
+        'Native Agent maintenance is required. This WebUI cannot perform '
+        'Agent updates or recovery; use the native Agent maintenance workflow. '
+        'No update or restart was started.'
+    )
+    return {
+        'ok': False,
+        'target': target,
+        'status': 'native-maintenance-required',
+        'native_maintenance_required': True,
+        'message': message,
+    }
+
+
+def _agent_update_status(include_agent=True) -> dict:
+    if not include_agent:
+        return _ignored_agent_update_info()
+    refusal = _agent_maintenance_required()
+    return {
+        'name': 'agent',
+        'behind': None,
+        'status': refusal['status'],
+        'native_maintenance_required': True,
+        'error': refusal['message'],
+        'recovery': {'force': False, 'clear_lock': False},
+    }
+
+
 def _ignored_agent_update_info() -> dict:
     """Return a stable update-check payload for intentionally ignored Agent updates."""
     return {'name': 'agent', 'behind': 0, 'ignored': True}
@@ -2407,6 +2439,7 @@ def cached_update_status(*, include_agent=True, channel=None):
         cached['include_agent'] = include_agent
         if not include_agent:
             cached['agent'] = _ignored_agent_update_info()
+    cached['agent'] = _agent_update_status(include_agent)
     cached['cached'] = True
     return cached
 
@@ -2433,10 +2466,12 @@ def check_for_updates(force=False, *, include_agent=True, channel=None):
             and time.time() - _update_cache['checked_at'] < CACHE_TTL
         ):
             cached = dict(_update_cache)
+            cached['agent'] = _agent_update_status(include_agent)
             cached['cached'] = True
             return cached
         if _check_in_progress and cache_matches:
             cached = dict(_update_cache)
+            cached['agent'] = _agent_update_status(include_agent)
             cached['cached'] = True
             return cached  # another thread is already checking this channel
         _check_in_progress = True
@@ -2444,12 +2479,7 @@ def check_for_updates(force=False, *, include_agent=True, channel=None):
     try:
         # Run checks outside the lock (network I/O)
         webui_info = _check_repo(REPO_ROOT, 'webui', channel)
-        # The update channel is a WebUI-only concept. The Agent is a separate
-        # project that tags plain v* and legitimately tracks master past its
-        # tags; it must ALWAYS use the default channel regardless of the user's
-        # WebUI channel selection. (Codex gate: passing 'experimental' here made
-        # the Agent ignore its v* tags and fall back to origin/master.)
-        agent_info = _check_repo(_AGENT_DIR, 'agent', DEFAULT_UPDATE_CHANNEL) if include_agent else _ignored_agent_update_info()
+        agent_info = _agent_update_status(include_agent)
 
         with _cache_lock:
             _update_cache['webui'] = webui_info
@@ -3094,6 +3124,8 @@ def apply_force_update(target: str, channel=None, *, force_active_runs: bool = F
     state. We refuse and return a clear message instead of silently downgrading.
     A deliberate rollback would be a separate, explicit feature.
     """
+    if target in ('agent', 'both'):
+        return _agent_maintenance_required(target)
     if channel is None:
         channel = _read_update_channel()
     channel = _normalize_channel(channel)
@@ -3261,6 +3293,8 @@ def apply_update(target, channel=None, *, force_active_runs: bool = False):
     Refuses while WebUI-owned runs are active unless ``force_active_runs``
     (#7293); see ``_run_fenced_update``.
     """
+    if target in ('agent', 'both'):
+        return _agent_maintenance_required(target)
     if channel is None:
         channel = _read_update_channel()
     channel = _normalize_channel(channel)
@@ -3308,6 +3342,8 @@ def _restore_stash_after_pull_failure(
 
 def _apply_update_inner(target, channel=DEFAULT_UPDATE_CHANNEL):
     """Inner implementation of apply_update, called under _apply_lock."""
+    if target in ('agent', 'both'):
+        return _agent_maintenance_required(target)
     channel = _normalize_channel(channel)
     if target == 'webui':
         path = REPO_ROOT
