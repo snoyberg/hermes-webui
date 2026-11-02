@@ -23,9 +23,20 @@ def test_explicit_check_uses_native_and_cached_read_is_inert(monkeypatch):
     monkeypatch.setattr(native, 'check', Mock(return_value=offer))
     monkeypatch.setattr(updates, '_check_repo', lambda *args: {'name': 'webui', 'behind': 0})
     assert updates.check_for_updates(force=True)['agent'] == offer
-    native.check.assert_called_once_with()
+    native.check.assert_called_once_with(force=True)
     assert updates.cached_update_status()['agent'] == offer
-    native.check.assert_called_once_with()
+    native.check.assert_called_once_with(force=True)
+
+
+def test_cached_identity_is_available_before_any_native_check(monkeypatch):
+    import api.updates as updates
+    from api import native_agent_update as native
+    monkeypatch.setattr(updates, '_update_cache', {'agent': None, 'checked_at': 0})
+    monkeypatch.setattr(native, '_identity', lambda: 'current-installation-profile')
+    request = Mock(side_effect=AssertionError('cached GET must not contact native'))
+    monkeypatch.setattr(native, '_request', request)
+    assert updates.cached_update_status()['agent']['owner'] == 'current-installation-profile'
+    request.assert_not_called()
 
 
 def test_submit_is_accepted_not_completed(monkeypatch):
