@@ -7810,6 +7810,11 @@ async function switchToProfile(name) {
     // would make New Chat / Send post the old profile's model (#6506 gate).
     if (typeof _clearEmptyComposerModelOverride === 'function') _clearEmptyComposerModelOverride();
     S.activeProfile = data.active || name;
+    if(typeof window!=='undefined'){
+      window._nativeAgentView=null;
+      window._nativeAgentResolveGeneration=(window._nativeAgentResolveGeneration||0)+1;
+    }
+    if(typeof _clearUpdateOffer==='function')_clearUpdateOffer();
     S.activeProfileIsDefault = !!data.is_default;
     // The switch's optimistic chip already claims the new profile, but the
     // localStorage hidden_tabs / tab_order mirror still holds the PREVIOUS
@@ -8101,6 +8106,7 @@ async function switchToProfile(name) {
     // 2026-10-09T00:15:45Z). A successful switch hands the mirror to its own
     // reconciliation, so the counter is still > 0 here and that one replays.
     if (typeof _profileSwitchInFlight === 'number' && _profileSwitchInFlight > 0) _profileSwitchInFlight--;
+    if(typeof _resumeNativeAgentUpdate==='function')_resumeNativeAgentUpdate().catch(()=>{});
     if (typeof _maybeReplayChatTodosRailSync === 'function') _maybeReplayChatTodosRailSync();
   }
 }
