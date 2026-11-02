@@ -22440,6 +22440,23 @@ def handle_post(handler, parsed) -> bool:
         return _handle_session_import(handler, body)
 
     # ── Self-update (POST) ──
+    if parsed.path in ('/api/updates/agent/status', '/api/updates/agent/reload'):
+        from api.native_agent_update import status
+        if set(body) - {'action_id', 'owner'}:
+            return bad(handler, 'Unexpected native status fields')
+        result = status(body.get('action_id'), body.get('owner'))
+        if parsed.path.endswith('/reload'):
+            if result.get('status') != 'success':
+                return j(handler, {'ok': False, 'status': 'unknown', 'message': 'Matching native success required; WebUI was not reloaded.'})
+            from api.updates import _restart_blocker_snapshot, _restart_blocked_response, _schedule_restart
+            blockers = _restart_blocker_snapshot()
+            if blockers['restart_blocked']:
+                return j(handler, _restart_blocked_response('webui', blockers))
+            _schedule_restart()
+            return j(handler, {'ok': True, 'restart_scheduled': True,
+                               'message': 'WebUI reload scheduled separately; recovery is not certified.'})
+        return j(handler, result)
+
     if parsed.path == "/api/updates/apply":
         target = body.get("target", "")
         if target not in ("webui", "agent"):
