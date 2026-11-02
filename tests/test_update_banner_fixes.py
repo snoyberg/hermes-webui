@@ -415,7 +415,7 @@ class TestConflictError:
         monkeypatch.setattr(upd, 'REPO_ROOT', tmp_path)
         monkeypatch.setattr(upd, '_AGENT_DIR', tmp_path)
 
-        result = upd.apply_update('agent')
+        result = upd.apply_update('webui', 'experimental')
         # Message must be actionable — should mention git checkout or pull
         msg = result['message']
         assert 'git' in msg.lower(), f"message should mention git: {msg}"
@@ -538,7 +538,7 @@ class TestApplyUpdateRestartSafety:
             STREAMS.clear()
             STREAMS['stream_active'] = queue.Queue()
         try:
-            result = upd.apply_force_update('agent')
+            result = upd.apply_force_update('webui')
         finally:
             with STREAMS_LOCK:
                 STREAMS.clear()
@@ -602,7 +602,7 @@ class TestApplyUpdateRestartSafety:
             ACTIVE_RUNS.clear()
             ACTIVE_RUNS['run_active'] = {'session_id': 's1', 'stream_id': 'missing-stream'}
         try:
-            result = upd.apply_force_update('agent')
+            result = upd.apply_force_update('webui')
         finally:
             with ACTIVE_RUNS_LOCK:
                 ACTIVE_RUNS.clear()
@@ -733,7 +733,7 @@ class TestSuccessfulUpdateReturnsRestartScheduled:
             lambda **kwargs: {'status': 'completed', 'message': 'Gateway service restarted successfully'},
         )
 
-        result = upd.apply_update('agent')
+        result = upd.apply_update('webui', 'experimental')
         assert result['ok'] is True
         assert ['pull', '--ff-only', 'fork', 'feature-branch'] in ran
 
@@ -827,7 +827,7 @@ class TestApplyForceUpdate:
         assert result['ok'] is False
 
 
-class TestAgentUpdateRequiresGatewayRestart:
+class TestAgentUpdateRequiresNativeMaintenance:
     """Agent updates must prove gateway restart before returning ok=True."""
 
     def test_agent_gateway_restart_retries_one_transient_failure(self, monkeypatch):
@@ -1373,7 +1373,7 @@ class TestAgentUpdateRequiresGatewayRestart:
             str(isolated_home),
         ]
 
-    def test_apply_update_agent_requires_gateway_restart(self, tmp_path, monkeypatch):
+    def test_apply_update_agent_refuses_generic_gateway_restart(self, tmp_path, monkeypatch):
         import api.updates as upd
 
         (tmp_path / '.git').mkdir()
@@ -1405,13 +1405,15 @@ class TestAgentUpdateRequiresGatewayRestart:
         monkeypatch.setattr('api.updates.restart_active_profile_gateway', fake_gateway_restart)
 
         result = upd.apply_update('agent')
-        assert result['ok'] is True
+        assert result['ok'] is False
         assert result['target'] == 'agent'
-        assert result['restart_scheduled'] is True
-        assert result['gateway_restart'] == 'completed'
-        assert gateway_restarts == ['default']
+        assert result['native_maintenance_required'] is True
+        assert 'restart_scheduled' not in result
+        assert 'gateway_restart' not in result
+        assert gateway_restarts == []
+        assert ran == []
 
-    def test_apply_update_agent_stash_conflict_success_invokes_gateway_restart(self, tmp_path, monkeypatch):
+    def test_apply_update_agent_refuses_before_stash_conflict(self, tmp_path, monkeypatch):
         import api.updates as upd
 
         (tmp_path / '.git').mkdir()
@@ -1455,14 +1457,15 @@ class TestAgentUpdateRequiresGatewayRestart:
         monkeypatch.setattr('api.updates.restart_active_profile_gateway', fake_gateway_restart)
 
         result = upd.apply_update('agent')
-        assert result['ok'] is True
-        assert result['stash_conflict'] is True
+        assert result['ok'] is False
         assert result['target'] == 'agent'
-        assert result['restart_scheduled'] is True
-        assert result['gateway_restart'] == 'in_progress'
-        assert gateway_restarts == ['default']
+        assert result['native_maintenance_required'] is True
+        assert 'restart_scheduled' not in result
+        assert 'gateway_restart' not in result
+        assert gateway_restarts == []
+        assert ran == []
 
-    def test_apply_update_agent_without_gateway_restart_result_fails(self, tmp_path, monkeypatch):
+    def test_apply_update_agent_refuses_before_busy_gateway(self, tmp_path, monkeypatch):
         import api.updates as upd
 
         (tmp_path / '.git').mkdir()
@@ -1494,13 +1497,13 @@ class TestAgentUpdateRequiresGatewayRestart:
 
         result = upd.apply_update('agent')
         assert result['ok'] is False
-        assert 'restart_scheduled' not in result
         assert result['target'] == 'agent'
-        assert result['gateway_restart'] == 'busy'
-        assert 'hermes gateway restart' in result['message']
-        assert restart_calls == ['default']
+        assert result['native_maintenance_required'] is True
+        assert 'restart_scheduled' not in result
+        assert 'gateway_restart' not in result
+        assert restart_calls == []
 
-    def test_apply_force_update_agent_uses_gateway_restart_status(self, tmp_path, monkeypatch):
+    def test_apply_force_update_agent_refuses_generic_reset(self, tmp_path, monkeypatch):
         import api.updates as upd
 
         (tmp_path / '.git').mkdir()
@@ -1525,12 +1528,14 @@ class TestAgentUpdateRequiresGatewayRestart:
         monkeypatch.setattr('api.updates.restart_active_profile_gateway', lambda **kwargs: {'status': 'completed', 'message': 'Gateway service restarted successfully'})
 
         result = upd.apply_force_update('agent')
-        assert result['ok'] is True
+        assert result['ok'] is False
         assert result['target'] == 'agent'
-        assert result['restart_scheduled'] is True
-        assert result['gateway_restart'] == 'completed'
+        assert result['native_maintenance_required'] is True
+        assert 'restart_scheduled' not in result
+        assert 'gateway_restart' not in result
+        assert ran == []
 
-    def test_apply_force_update_agent_fails_when_gateway_restart_busy(self, tmp_path, monkeypatch):
+    def test_apply_force_update_agent_refuses_before_busy_gateway(self, tmp_path, monkeypatch):
         import api.updates as upd
 
         (tmp_path / '.git').mkdir()
@@ -1558,8 +1563,9 @@ class TestAgentUpdateRequiresGatewayRestart:
         result = upd.apply_force_update('agent')
         assert result['ok'] is False
         assert result['target'] == 'agent'
-        assert result['gateway_restart'] == 'busy'
-        assert 'hermes gateway restart' in result['message']
+        assert result['native_maintenance_required'] is True
+        assert 'restart_scheduled' not in result
+        assert 'gateway_restart' not in result
 
     def test_apply_update_webui_does_not_call_gateway_restart(self, tmp_path, monkeypatch):
         import api.updates as upd

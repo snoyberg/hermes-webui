@@ -307,7 +307,7 @@ class TestApplyUpdateDiagnostics:
     # ------------------------------------------------------------------
 
     def test_fetch_failure_for_agent_target(self, tmp_path):
-        """Fetch failure path also works when target='agent'."""
+        """Agent maintenance refuses before attempting a generic fetch."""
         (tmp_path / '.git').mkdir()
 
         from api import updates
@@ -319,9 +319,8 @@ class TestApplyUpdateDiagnostics:
             result = updates._apply_update_inner('agent')
 
         assert result['ok'] is False
-        assert 'could not reach' in result['message'].lower() or \
-               'internet' in result['message'].lower() or \
-               'remote' in result['message'].lower()
+        assert result['native_maintenance_required'] is True
+        mock_run_git.assert_not_called()
 
 
 # Issue #4085 regression: a dirty install at-or-past the latest release tag

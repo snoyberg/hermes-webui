@@ -170,49 +170,13 @@ def test_agent_repo_falls_through_to_branch_even_on_stable(channel_repo):
 
 
 def test_agent_resolution_identical_under_both_webui_channels(tmp_path, monkeypatch):
-    """Codex gate: the update CHANNEL is WebUI-only. An Agent repo that tags only
-    plain v* must resolve release/apply IDENTICALLY whether the user's WebUI
-    channel is 'stable' or 'experimental' — the webui channel must never leak
-    into the agent check (which would make the agent ignore its v* tags and fall
-    back to origin/master)."""
-    agent = tmp_path / 'agent'
-    agent.mkdir()
-    _git(agent, 'init', '-q')
-    _git(agent, 'config', 'user.email', 't@t.co')
-    _git(agent, 'config', 'user.name', 'Test')
-    # An origin that cannot supply refs, locally: this test needs the fetch to
-    # fail so the agent leg must resolve from its own tags. A network URL made
-    # the test depend on github.com — and an unauthenticated one that answers 401
-    # makes the update check open a desktop credential dialog.
-    _git(agent, 'remote', 'add', 'origin', str(tmp_path / 'unreachable-origin.git'))
-    _git(agent, 'commit', '-q', '--allow-empty', '-m', 'a1')
-    _git(agent, 'tag', 'v1.0.0')
-    _git(agent, 'commit', '-q', '--allow-empty', '-m', 'a2')
-    _git(agent, 'tag', 'v1.0.3')            # agent has ONLY plain v* tags, no exp-v*
-    _git(agent, 'checkout', '-q', 'v1.0.0')  # behind by one release
-
-    # check_for_updates threads the user's WebUI channel; the agent leg must
-    # ignore it. Compare agent payloads under stable vs experimental WebUI.
+    """WebUI channel selection cannot authorize generic Agent maintenance."""
     monkeypatch.setattr(updates, 'REPO_ROOT', tmp_path / 'nonexistent-webui')
-    monkeypatch.setattr(updates, '_AGENT_DIR', agent)
-
-    def fresh_cache():
-        monkeypatch.setitem(updates._update_cache, 'checked_at', 0)
-
-    fresh_cache()
-    stable = updates.check_for_updates(force=True, include_agent=True, channel='stable')['agent']
-    fresh_cache()
-    experimental = updates.check_for_updates(force=True, include_agent=True, channel='experimental')['agent']
-
-    # Agent must resolve its v1.0.3 release identically on both — never None /
-    # origin/master (which is what leaking 'experimental' into the agent caused).
-    assert stable.get('latest_version') == 'v1.0.3'
-    assert experimental.get('latest_version') == 'v1.0.3'
-    assert stable.get('behind') == experimental.get('behind') == 1
-    # Apply-ref selection for the agent is channel-independent because the apply
-    # wrappers force DEFAULT_UPDATE_CHANNEL for target=='agent'. Verified at the
-    # raw layer with the default (stable) channel — the agent's v* tag resolves.
-    assert updates._select_apply_compare_ref(agent, 'stable', 'agent') == 'v1.0.3'
+    stable = updates.check_for_updates(force=True, channel='stable')['agent']
+    experimental = updates.check_for_updates(force=True, channel='experimental')['agent']
+    assert stable == experimental
+    assert stable['behind'] is None
+    assert stable['native_maintenance_required'] is True
 
 
 # ── Force-update rewind guard (Codex CORE #3) ────────────────────────────────
