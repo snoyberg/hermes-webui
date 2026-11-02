@@ -13336,6 +13336,7 @@ async function checkUpdatesNow(channelOverride){
         if(status){status.textContent=t('settings_update_no_git');status.style.color='var(--muted)';}
       } else {
         let txt=t('settings_up_to_date');
+        if(data.agent?.native&&data.agent.message)txt+=' · Agent: '+data.agent.message;
         if(tagInfo) txt += ' ' + t('settings_latest_tag_suffix').replace('{0}', tagInfo);
         if(status){status.textContent=txt;status.style.color='var(--success)';}
         if(typeof _showUpdateBanner==='function') _showUpdateBanner(data,_recoveryGenerationAtCheck);
