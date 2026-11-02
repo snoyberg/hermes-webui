@@ -855,7 +855,8 @@ def test_update_cache_is_scoped_by_agent_inclusion(tmp_path):
     assert ignored['agent']['ignored'] is True
     assert included['agent']['name'] == 'agent'
     assert included['agent'].get('ignored') is not True
-    assert calls == ['webui', 'webui', 'agent']
+    assert calls == ['webui', 'webui']
+    assert included['agent']['native_maintenance_required'] is True
 
 
 @pytest.mark.parametrize('in_progress,force', [(False, False), (True, True)])
