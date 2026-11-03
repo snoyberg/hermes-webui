@@ -2363,11 +2363,11 @@ def test_background_source_exclusion_literal_matches_the_constant():
     from pathlib import Path
 
     source = Path(models.__file__).read_text(encoding="utf-8")
-    excluded = (*models.INTERACTIVE_WINDOW_EXCLUDED_CLI_SOURCES, "tool")
+    excluded = models.INTERACTIVE_WINDOW_EXCLUDED_CLI_SOURCES
     literal = ", ".join(f'"{name}"' for name in excluded)
     assert f"exclude_sources=({literal}) if source_filter is None else None" in source, (
         "the interactive exclude_sources literal must list exactly "
-        f"INTERACTIVE_WINDOW_EXCLUDED_CLI_SOURCES plus tool ({excluded!r})"
+        f"INTERACTIVE_WINDOW_EXCLUDED_CLI_SOURCES ({excluded!r})"
     )
     assert '("cron", "webhook", "kanban", "oneshot", "tool") if source_filter is None' in source, (
         "test_issue2841_show_cron_sessions_toggle.py pins this exact substring"
