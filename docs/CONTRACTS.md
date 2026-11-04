@@ -34,7 +34,10 @@ and delegation wakeups also carry the corresponding native display kind.
 
 Generate this envelope only after rejected delegation notices are removed and the
 input is rebuilt. It is never decoded from client text or accepted as client
-metadata. Downstream consumers must validate the current transcript row, complete
+metadata. Credential recovery must reuse that same final accepted envelope in
+both returned-error and exception retries, signature-gated against the rebuilt
+Agent's actual callable; it must not reclassify text or recover rejected notices.
+Downstream consumers must validate the current transcript row, complete
 text reconstruction, producer and version before using segments. Text copies are
 intentional: native egress redaction can scrub all copies without invalidating
 byte offsets or leaking a raw unredacted duplicate. Unknown/stale metadata gives
