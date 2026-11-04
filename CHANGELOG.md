@@ -5,6 +5,8 @@
 
 ### Added
 
+- **The test suite refuses git commands that would change the real checkout.** A test that runs a mutating git command (fetch, checkout, stash, reset and so on) against the WebUI or Agent checkout (including from a linked worktree of it) now fails with the command and directory, instead of changing the clone, as a broken mock once did with a real `git fetch`. Read-only git, temporary repositories, `git config` writes to other repositories and non-git commands are unaffected, and a test can opt out explicitly. Tests only. (#8801)
+
 - **Tasks has a read-only Scripts tab.** Next to Jobs, a Scripts tab lists the active profile's `scripts/` folder (the scripts cron jobs can run) with each file's size, age and the description from its leading comment. The tab only lists (there is no viewer yet; to view or edit a script, open the file on the server); a read-only `GET /api/scripts/raw` returns one file's text for a later viewer. Reads stay inside that folder (no symlinks out, size-capped), a platform that cannot open the folder safely says so instead of showing an empty list, and the tab hides "New job" since it cannot create anything. Thanks @happy5318. (#7685, for #2316)
 
 - **The workspace Artifacts panel shows which skills each conversation used.** A new "Skills used" section lists every skill the session loaded and how many times, counted from successful skill loads (the Agent's `skill_view`, `/use` and bundle commands) and kept per session and profile. Files and skills sit in their own collapsible sections ("Files changed N", "Skills used N"), and the Artifacts badge counts both. Thanks @rodboev. (#6693, for #6593)
@@ -82,6 +84,8 @@
   exactly as before. Thanks @ybai08. (#8138, fixes #8126)
 
 ### Fixed
+
+- **An older Agent's memory provider is released again after an unowned eviction.** With an Agent that predates the memory release hook (v0.22.2, v2026.9.24 and earlier releases with memory on), evicting a cached agent whose session owner could not be resolved left the provider's writer thread running until WebUI restarted; v0.52.544 stopped it. WebUI now releases it exactly once, in the bound profile's home, and marks the agent so the Agent's own shutdown does not run a second session end or shutdown. A same-profile chat turn that starts while that release is running waits for it, at most 30 seconds, and then builds without memory and uncached, with a warning. A provider another live agent still uses keeps running. Current Agents are unaffected. (#8806, #8804)
 
 - **Delegated child sessions show under their parent in the sidebar again.** Since exp-v0.52.618, an opened delegated (subagent) child, a child of a compressed parent, and children of an intermediate segment could fall out of both sidebar tabs, and with All profiles a child could appear under another profile's parent when two profiles shared a session id. The sidebar now nests each child under its own parent in its own profile, as v0.52.617 did, and a child whose parent is missing from its profile shows as a top-level row instead of being hidden. With "Show CLI sessions" off, an opened delegated child of a CLI or Desktop session now follows its parent out of the WebUI list, as other delegated children already did; it shows under its parent again once CLI sessions are shown. Display only; no markup or styling changes. (#8792, #8791)
 
