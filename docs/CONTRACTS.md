@@ -23,6 +23,26 @@ contributor guidance; it does not change runtime behavior or CI gates.
 
 ## Runtime, durability, and state contracts
 
+### Native text-origin metadata
+
+The streaming producer passes server-owned source boundaries through the native
+Agent's existing `persist_user_display_metadata.input_origin` interface, gated by
+its callable signature. The version-1 envelope binds the final model-facing text
+(including workspace context) and clean submitted text to ordered machine/human
+segments. Image payloads are not duplicated into metadata. Whole server process
+and delegation wakeups also carry the corresponding native display kind.
+
+Generate this envelope only after rejected delegation notices are removed and the
+input is rebuilt. It is never decoded from client text or accepted as client
+metadata. Credential recovery must reuse that same final accepted envelope in
+both returned-error and exception retries, signature-gated against the rebuilt
+Agent's actual callable; it must not reclassify text or recover rejected notices.
+Downstream consumers must validate the current transcript row, complete
+text reconstruction, producer and version before using segments. Text copies are
+intentional: native egress redaction can scrub all copies without invalidating
+byte offsets or leaking a raw unredacted duplicate. Unknown/stale metadata gives
+no machine-origin attestation. Historical text alone cannot establish authorship.
+
 - [`docs/architecture/model-picker-routing.md`](architecture/model-picker-routing.md):
   current contract for provider-scoped model identity, exact OpenRouter route
   matching, overflow promotion, routed fallback, and selected-row rendering.
