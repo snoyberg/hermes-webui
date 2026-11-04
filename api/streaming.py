@@ -13918,6 +13918,8 @@ def _build_run_conversation_kwargs(
     task_id,
     persist_user_message,
     persist_user_timestamp,
+    persist_user_display_kind=None,
+    persist_user_display_metadata=None,
     legacy_row_identity_owner=None,
 ):
     """Build one rolling-compatible Agent invocation contract.
@@ -13954,6 +13956,11 @@ def _build_run_conversation_kwargs(
         "title_user_message",
         persist_user_message,
     )
+    for name, value in (
+        ("persist_user_display_kind", persist_user_display_kind),
+        ("persist_user_display_metadata", persist_user_display_metadata),
+    ):
+        _add_supported_run_conversation_kwarg(callable_obj, kwargs, name, value)
     return kwargs
 
 
@@ -17459,6 +17466,8 @@ def _run_agent_streaming(
                                     task_id=session_id,
                                     persist_user_message=msg_text,
                                     persist_user_timestamp=_heal_persist_user_timestamp,
+                                    persist_user_display_kind=_origin_kind,
+                                    persist_user_display_metadata=_origin_metadata,
                                     legacy_row_identity_owner=(
                                         _active_turn_identity if _cancelled_journal_turn_owner(s.messages) else None
                                     ),
@@ -19027,6 +19036,8 @@ def _run_agent_streaming(
                             task_id=session_id,
                             persist_user_message=msg_text,
                             persist_user_timestamp=_heal_persist_user_timestamp,
+                            persist_user_display_kind=_origin_kind,
+                            persist_user_display_metadata=_origin_metadata,
                             legacy_row_identity_owner=(
                                 _active_turn_identity if _cancelled_journal_turn_owner(s.messages) else None
                             ),
