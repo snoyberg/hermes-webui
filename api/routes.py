@@ -26608,22 +26608,32 @@ def _handle_tts(handler, parsed):
         oai_voice = "alloy"
         try:
             from api.config import get_config
-            tts_cfg = (get_config() or {}).get("tts", {})
-            if isinstance(tts_cfg, dict):
-                oai_cfg = tts_cfg.get("openai", {})
-                if isinstance(oai_cfg, dict):
-                    base_url = _normalized_openai_tts_base_url(oai_cfg.get("base_url") or base_url)
-                    model = oai_cfg.get("model") or model
-                    oai_voice = oai_cfg.get("voice") or oai_voice
-                else:
-                    base_url = _normalized_openai_tts_base_url(base_url)
-            else:
-                base_url = _normalized_openai_tts_base_url(base_url)
+            config = get_config()
+            if not isinstance(config, dict):
+                raise TypeError("invalid TTS configuration")
+            tts_cfg = config.get("tts", {})
+            if not isinstance(tts_cfg, dict):
+                raise TypeError("invalid TTS configuration")
+            oai_cfg = tts_cfg.get("openai", {})
+            if not isinstance(oai_cfg, dict):
+                raise TypeError("invalid OpenAI TTS configuration")
+            base_url = oai_cfg.get("base_url", base_url)
+            # Noncredential local-only sentinels must never authorize a cloud
+            # default, including when the config loader returns empty defaults.
+            if api_key.startswith("local-only-"):
+                from urllib.parse import urlsplit
+                parsed = urlsplit(base_url)
+                if parsed.scheme != "http" or parsed.hostname not in _TTS_LOCALHOST_HOSTS:
+                    raise ValueError("local-only TTS requires an explicit loopback URL")
+            base_url = _normalized_openai_tts_base_url(base_url)
+            model = oai_cfg.get("model") or model
+            oai_voice = oai_cfg.get("voice") or oai_voice
         except ValueError:
             from api.helpers import bad as _bad
             return _bad(handler, "invalid OpenAI base_url in config", 400)
         except Exception:
-            pass
+            from api.helpers import bad as _bad
+            return _bad(handler, "OpenAI TTS configuration unavailable", 503)
 
         url = f"{base_url}/audio/speech"
         req_body = json.dumps({
