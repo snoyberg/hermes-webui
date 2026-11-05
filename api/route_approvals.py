@@ -197,6 +197,8 @@ def _approval_sse_notify_locked(session_id: str, head: dict | None, total: int) 
     hide its approval card.
     """
     payload = {"pending": dict(head) if head else None, "pending_count": total}
+    from api.web_push import attention
+    attention(session_id, 'approval', head)
     subs = _approval_sse_subscribers.get(session_id, ())
     for q in subs:
         try:
