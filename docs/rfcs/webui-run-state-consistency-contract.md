@@ -37,6 +37,23 @@ This RFC defines a consistency contract for those layers. It complements the
 larger run adapter direction in #1925 by documenting what must remain coherent
 while WebUI still has multiple overlapping state stores.
 
+## OpenAI-compatible read-aloud configuration
+
+`_handle_tts` resolves the active profile's TTS configuration before opening its
+speech transport. Config-loader failures or non-mapping root/`tts`/`openai`
+sections refuse the request; they must not silently select the cloud default.
+Missing optional sections in a valid mapping still retain intentional OpenAI
+cloud defaults for ordinary credentials.
+
+A noncredential API-key sentinel beginning `local-only-` opts the existing
+OpenAI-compatible route into local-only synthesis. It requires an explicit
+`tts.openai.base_url` using HTTP and the existing loopback host allowlist
+(`127.0.0.1`, `::1`, `localhost`). Empty/default config, a cloud endpoint, or a
+malformed URL refuses before transport. Existing URL validation, proxy bypass,
+redirect refusal, response bounds and profile checks remain in effect. A local
+synthesis failure never retries a cloud provider. This does not disable other
+intentionally selected speech engines or change browser preferences.
+
 ## Failed attachment retry navigation
 
 The browser's `_uploadRecoveries` map owns failed-send File references and upload
