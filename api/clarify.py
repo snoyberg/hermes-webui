@@ -46,6 +46,8 @@ def register_gateway_notify(session_key: str, cb) -> None:
 def _clear_queue_locked(session_key: str) -> list[_ClarifyEntry]:
     entries = _gateway_queues.pop(session_key, [])
     _pending.pop(session_key, None)
+    from api.web_push import attention
+    attention(session_key, 'clarify', None)
     return entries
 
 
@@ -102,6 +104,8 @@ def _with_timeout_metadata(data: dict) -> dict:
 def _clarify_sse_notify(session_id: str, head: dict | None, total: int) -> None:
     """Push a clarify event to all SSE subscribers for a session."""
     payload = {"pending": dict(head) if head else None, "pending_count": total}
+    from api.web_push import attention
+    attention(session_id, 'clarify', head)
     for q in _clarify_sse_subscribers.get(session_id, ()):
         try:
             q.put_nowait(payload)
