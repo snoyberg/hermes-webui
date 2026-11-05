@@ -10893,6 +10893,7 @@ function _completionNotificationPreviewText(lastAssistantMessage, options){
 }
 
 function playNotificationSound(){
+  if(typeof privatePushOwnsAlerts==='function'&&privatePushOwnsAlerts())return;
   if(!window._soundEnabled) return;
   try{
     const ctx=new (window.AudioContext||window.webkitAudioContext)();
@@ -10917,6 +10918,7 @@ function _attentionSoundKey(sid,kind,count){
 }
 
 function playAttentionSound(key){
+  if(typeof privatePushOwnsAlerts==='function'&&privatePushOwnsAlerts())return;
   if(!window._soundEnabled) return;
   const nowMs=Date.now();
   if(window._lastAttentionSoundAt&&nowMs-window._lastAttentionSoundAt<900) return;
@@ -11084,6 +11086,7 @@ function _notifyPromptCard(kind, sid, pending){
   } catch (_) { rollback(); }
 }
 function sendBrowserNotification(title,body,options={}){
+  if(typeof privatePushOwnsAlerts==='function'&&privatePushOwnsAlerts())return false;
   const force=!!(options&&options.force);
   // #4416: `forceHidden` means the caller already determined the tab was hidden
   // during the relevant window (e.g. a stream that ran while backgrounded), so
