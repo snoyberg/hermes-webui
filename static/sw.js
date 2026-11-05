@@ -29,6 +29,7 @@ const SHELL_ASSETS = [
   './static/a11y-helpers.js' + VQ,
   './static/ui.js' + VQ,
   './static/messages.js' + VQ,
+  './static/private_push.js' + VQ,
   './static/sessions.js' + VQ,
   './static/panels.js' + VQ,
   './static/commands.js' + VQ,
@@ -175,8 +176,107 @@ self.addEventListener('fetch', (event) => {
 });
 
 
+// Private push state is distinct from the static shell cache. Updating the
+// shell must not erase explicit device/profile consent or retry dedupe.
+function privatePushDatabase(){
+  return new Promise((resolve,reject)=>{
+    const request=indexedDB.open('hermes-private-push-v1',1);
+    request.onupgradeneeded=()=>request.result.createObjectStore('state');
+    request.onsuccess=()=>resolve(request.result);
+    request.onerror=()=>reject(new Error('Push storage unavailable'));
+  });
+}
+async function privatePushState(operation){
+  const db=await privatePushDatabase();
+  try{
+    return await new Promise((resolve,reject)=>{
+      const tx=db.transaction('state','readwrite');
+      let result;
+      operation(tx.objectStore('state'),value=>{result=value;});
+      tx.oncomplete=()=>resolve(result);
+      tx.onerror=()=>reject(new Error('Push storage unavailable'));
+      tx.onabort=()=>reject(new Error('Push storage unavailable'));
+    });
+  }finally{db.close();}
+}
+function privatePushProfile(value){return typeof value==='string'&&/^[A-Za-z0-9_-]{1,64}$/.test(value);}
+const privatePushConsentWrites=new Map();
+self.addEventListener('message',event=>{
+  const data=event.data||{};
+  if(data.type!=='private-push-profile'||!privatePushProfile(data.profile)||typeof data.enabled!=='boolean')return;
+  try{if(new URL(event.source.url).origin!==self.location.origin)return;}catch(_){return;}
+  // Preserve message order even if opening storage stalls beyond the page's
+  // ack timeout. A later Disable must be the final persisted consent value.
+  const pending=(privatePushConsentWrites.get(data.profile)||Promise.resolve())
+    .then(()=>privatePushState(store=>store.put(data.enabled,'profile:'+data.profile)));
+  const tail=pending.catch(()=>{});
+  privatePushConsentWrites.set(data.profile,tail);
+  tail.then(()=>{if(privatePushConsentWrites.get(data.profile)===tail)privatePushConsentWrites.delete(data.profile);});
+  event.waitUntil(pending
+    .then(()=>{if(event.ports[0])event.ports[0].postMessage({ok:true});})
+    .catch(()=>{if(event.ports[0])event.ports[0].postMessage({ok:false});}));
+});
+self.addEventListener('push',event=>{
+  event.waitUntil((async()=>{
+    let data;
+    try{data=event.data.json();}catch(_){return;}
+    if(!data||data.v!==1||!['complete','approval','clarify','test'].includes(data.kind)
+       ||!privatePushProfile(data.profile)||typeof data.session!=='string'
+       ||!(/^[A-Za-z0-9_-]{1,128}$/.test(data.session)||(data.kind==='test'&&data.session===''))
+       ||typeof data.event!=='string'||!/^[a-f0-9]{64}$/.test(data.event))return;
+    const key='event:'+data.event;
+    const claimed=await privatePushState((store,done)=>{
+      const enabled=store.get('profile:'+data.profile);
+      enabled.onsuccess=()=>{
+        if(enabled.result!==true){done(null);return;}
+        const seen=store.get(key);
+        seen.onsuccess=()=>{
+          // Persist the attempt before display. An uncertain/failed display
+          // must not turn a transport retry into another audible alert.
+          store.put(Date.now(),key);done({replay:!!seen.result});
+        };
+      };
+      // Bounded retention independent of worker lifetime; profile records survive.
+      const cursor=store.openCursor();
+      cursor.onsuccess=()=>{
+        const row=cursor.result;
+        if(!row)return;
+        if(String(row.key).startsWith('event:')&&Number(row.value)<Date.now()-86400000)row.delete();
+        row.continue();
+      };
+    });
+    if(!claimed)return;
+    const body=data.kind==='complete'?'A response is ready. Open Hermes to continue.'
+      :data.kind==='test'?'Private push notifications are ready.'
+      :'Open Hermes to review a pending request.';
+    // WebKit requires a user-visible notification for every received push.
+    // Retries replace the same generic notification without requesting sound.
+    await self.registration.showNotification('Hermes',{
+      body,tag:'hermes-push-'+data.event,renotify:false,silent:claimed.replay,
+      icon:new URL('static/favicon-192.png',self.registration.scope).href,
+      badge:new URL('static/favicon-32.png',self.registration.scope).href,
+      data:{privatePush:true,profile:data.profile,session:data.session},
+    });
+  })());
+});
+
 self.addEventListener('notificationclick', (event) => {
   event.notification.close();
+  const push=event.notification.data;
+  if(push&&push.privatePush===true){
+    if(!privatePushProfile(push.profile)||typeof push.session!=='string'
+       ||!(/^[A-Za-z0-9_-]{1,128}$/.test(push.session)||push.session===''))return;
+    const target=new URL(push.session?'session/'+encodeURIComponent(push.session):'./',self.registration.scope);
+    target.searchParams.set('profile',push.profile);
+    // Do not focus a same-session tab in a different profile or navigate an
+    // unrelated dirty composer. Boot resolves profile before conversation.
+    event.waitUntil(self.clients.matchAll({type:'window',includeUncontrolled:true}).then(clients=>{
+      const exact=clients.find(client=>client.url===target.href&&'focus' in client);
+      if(exact)return exact.focus();
+      return self.clients.openWindow?self.clients.openWindow(target.href):undefined;
+    }));
+    return;
+  }
   const rawUrl = (event.notification.data && event.notification.data.url) || './';
   const targetUrl = new URL(rawUrl, self.registration.scope || './').href;
   const targetPath = new URL(targetUrl).pathname;
