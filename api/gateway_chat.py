@@ -3255,6 +3255,9 @@ def _run_gateway_chat_streaming(
     def put_gateway_event(event, data):
         if cancel_event.is_set() and not success_writeback_committed and event not in ("cancel", "error", "apperror"):
             return
+        if event in ('done', 'cancel', 'error', 'apperror', 'stream_end'):
+            from api.web_push import finish_run
+            finish_run(session_id, stream_id, completed=event == 'done')
         if event == "apperror" and isinstance(data, dict):
             data = data.copy()
             data.setdefault("session_id", session_id)
@@ -3285,6 +3288,9 @@ def _run_gateway_chat_streaming(
     usage = {"input_tokens": 0, "output_tokens": 0, "estimated_cost": 0}
     try:
         s = get_session(session_id)
+        from api.web_push import bind_run
+        bind_run(s, stream_id)
+
         # Profile-bound like the endpoint below: the worker thread has no request profile TLS.
         from api.gateway_sessions import config_for_session
         cfg = config_for_session(vars(s))
@@ -3900,6 +3906,8 @@ def _run_gateway_chat_streaming(
             "hint": "Check HERMES_WEBUI_GATEWAY_BASE_URL and Gateway API server health.",
         })
     finally:
+        from api.web_push import finish_run
+        finish_run(session_id, stream_id)
         try:
             settle_gateway_stream_approvals(
                 session_id,
