@@ -278,7 +278,13 @@ def test_push_http_uses_existing_auth_csrf_and_profile_dispatch(tmp_path, monkey
         assert request(headers | {'Origin': 'https://evil.invalid'})[0] == 403
         assert request({'Cookie': 'hermes_session='+cookie})[0] == 403
         monkeypatch.setattr(auth, 'is_auth_enabled', lambda: False)
-        assert request(headers)[0] == 403
+        # Boot probes availability even on deliberately unauthenticated servers.
+        # Report unavailable without a console-producing HTTP error or disclosure.
+        status, payload = request(headers)
+        assert status == 200
+        assert json.loads(payload) == {'available': False, 'enabled': False}
+        for action in ('enable', 'disable', 'test'):
+            assert request(headers, action=action)[0] == 403
     finally:
         server.shutdown()
         server.server_close()
