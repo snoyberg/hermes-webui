@@ -164,6 +164,135 @@ def test_openai_tts_prefers_voice_tools_key_over_openai_key(monkeypatch):
     assert captured["auth"] == "Bearer sk-voice-tools"
 
 
+@pytest.mark.parametrize("error", [RuntimeError("synthetic loader failure"), OSError("synthetic read failure")])
+def test_openai_tts_config_failure_never_opens_transport(monkeypatch, error):
+    import api.config as config
+
+    calls = []
+
+    def fail_config():
+        raise error
+
+    monkeypatch.setenv("VOICE_TOOLS_OPENAI_KEY", "local-only-kokoro")
+    monkeypatch.setattr(config, "get_config", fail_config)
+    monkeypatch.setattr(routes, "_tts_open", lambda *a, **kw: calls.append(a))
+    h = _post({"text": "Synthetic speech probe", "engine": "openai"})
+    routes._handle_tts(h, None)
+    assert calls == [], "config failure must not disclose text to a default endpoint"
+    assert h.status == 503
+    assert h.payload()["error"] == "OpenAI TTS configuration unavailable"
+
+
+@pytest.mark.parametrize("cfg", [None, [], {"tts": None}, {"tts": []}, {"tts": {"openai": None}}, {"tts": {"openai": []}}])
+def test_openai_tts_malformed_config_never_opens_transport(monkeypatch, cfg):
+    import api.config as config
+
+    calls = []
+    monkeypatch.setenv("OPENAI_API_KEY", "synthetic-cloud-key")
+    monkeypatch.setattr(config, "get_config", lambda: cfg)
+    monkeypatch.setattr(routes, "_tts_open", lambda *a, **kw: calls.append(a))
+    h = _post({"text": "Synthetic speech probe", "engine": "openai"})
+    routes._handle_tts(h, None)
+    assert calls == [], "malformed config must not select cloud defaults"
+    assert h.status == 503
+
+
+@pytest.mark.parametrize("base_url", [None, "", "https://api.openai.com/v1", "https://speech.example/v1", "http://localhost.evil.example/v1", "http://127.0.0.1@evil.example/v1"])
+def test_openai_tts_local_only_key_requires_explicit_loopback(monkeypatch, base_url):
+    import api.config as config
+
+    calls = []
+    oai_cfg = {} if base_url is None else {"base_url": base_url}
+    monkeypatch.setenv("VOICE_TOOLS_OPENAI_KEY", "local-only-kokoro")
+    monkeypatch.setattr(config, "get_config", lambda: {"tts": {"openai": oai_cfg}})
+    monkeypatch.setattr(routes, "_tts_open", lambda *a, **kw: calls.append(a))
+    h = _post({"text": "Synthetic speech probe", "engine": "openai"})
+    routes._handle_tts(h, None)
+    assert calls == [], "local-only credential must never authorize cloud transport"
+    assert h.status == 400
+
+
+@pytest.mark.parametrize("host", ["127.0.0.1", "localhost", "[::1]"])
+def test_openai_tts_local_only_key_retains_local_recipe(monkeypatch, host):
+    import api.config as config
+
+    captured = []
+    base_url = f"http://{host}:17606/v1"
+    monkeypatch.setenv("VOICE_TOOLS_OPENAI_KEY", "local-only-kokoro")
+    monkeypatch.setattr(config, "get_config", lambda: {"tts": {"openai": {
+        "base_url": base_url, "model": "kokoro", "voice": "liam50-onyx50",
+    }}})
+
+    def transport(req, **kw):
+        captured.append(req)
+        return _StreamOnceResponse([b"synthetic-audio"])
+
+    monkeypatch.setattr(routes, "_tts_open", transport)
+    h = _post({"text": "Synthetic speech probe", "engine": "openai"})
+    routes._handle_tts(h, None)
+    assert h.status == 200
+    assert len(captured) == 1
+    assert captured[0].full_url == f"{base_url}/audio/speech"
+    assert json.loads(captured[0].data) == {
+        "model": "kokoro", "voice": "liam50-onyx50", "input": "Synthetic speech probe",
+    }
+
+
+@pytest.mark.parametrize("cfg", [{}, {"tts": {}}, {"tts": {"openai": {}}}])
+def test_openai_tts_profile_sentinel_blocks_loader_defaults(monkeypatch, cfg):
+    import api.config as config
+    import api.onboarding as onboarding
+
+    calls = []
+    monkeypatch.setattr(onboarding, "_load_env_file", lambda *_: {"VOICE_TOOLS_OPENAI_KEY": "local-only-kokoro"})
+    monkeypatch.setattr(config, "get_config", lambda: cfg)
+    monkeypatch.setattr(routes, "_tts_open", lambda *a, **kw: calls.append(a))
+    h = _post({"text": "Synthetic speech probe", "engine": "openai"})
+    routes._handle_tts(h, None)
+    assert calls == []
+    assert h.status == 400
+
+
+@pytest.mark.parametrize("contents", [None, "tts: [", "[]", "{}"])
+def test_openai_tts_real_loader_defaults_cannot_escape_local_only(monkeypatch, tmp_path, contents):
+    import api.config as config
+
+    path = tmp_path / "config.yaml"
+    if contents is not None:
+        path.write_text(contents)
+    cache = {}
+    for name, value in {"_cfg_cache": cache, "cfg": cache, "_cfg_mtime": 0.0,
+                        "_cfg_path": None, "_cfg_fingerprint": None}.items():
+        monkeypatch.setattr(config, name, value)
+    monkeypatch.setattr(config, "_get_config_path", lambda: path)
+    monkeypatch.setenv("VOICE_TOOLS_OPENAI_KEY", "local-only-kokoro")
+    calls = []
+    monkeypatch.setattr(routes, "_tts_open", lambda *a, **kw: calls.append(a))
+    h = _post({"text": "Synthetic speech probe", "engine": "openai"})
+    routes._handle_tts(h, None)
+    assert calls == []
+    assert h.status == 400
+
+
+def test_openai_tts_local_transport_failure_has_no_fallback(monkeypatch):
+    import api.config as config
+
+    calls = []
+    monkeypatch.setenv("VOICE_TOOLS_OPENAI_KEY", "local-only-kokoro")
+    monkeypatch.setenv("OPENAI_API_KEY", "synthetic-unused-cloud-key")
+    monkeypatch.setattr(config, "get_config", lambda: {"tts": {"openai": {"base_url": "http://127.0.0.1:17606/v1"}}})
+
+    def fail_local(req, **kw):
+        calls.append(req.full_url)
+        raise OSError("synthetic local refusal")
+
+    monkeypatch.setattr(routes, "_tts_open", fail_local)
+    h = _post({"text": "Synthetic speech probe", "engine": "openai"})
+    routes._handle_tts(h, None)
+    assert h.status == 500
+    assert calls == ["http://127.0.0.1:17606/v1/audio/speech"]
+
+
 def test_openai_tts_config_overrides(monkeypatch):
     captured = {}
     import api.config as config
