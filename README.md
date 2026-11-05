@@ -802,6 +802,7 @@ The WebUI is still coupled to Hermes Agent internals for runtime execution, prov
 **Start here**
 - [`docs/why-hermes.md`](docs/why-hermes.md) — why Hermes, the mental model, and a detailed comparison to Claude Code / Codex / OpenCode / Cursor
 - [`docs/onboarding.md`](docs/onboarding.md) — first-run wizard, provider setup, local model server Base URLs, and safe re-runs
+- [`docs/web-push.md`](docs/web-push.md) — opt-in private closed-app notifications, administrator setup, security and delivery limits
 - [`docs/troubleshooting.md`](docs/troubleshooting.md) — diagnostic flows for common failures (e.g. "AIAgent not available")
 
 **Using & customizing**
