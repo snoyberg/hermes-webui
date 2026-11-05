@@ -4469,6 +4469,7 @@ window._mirrorSpeechSettingsFromServer=_mirrorSpeechSettingsFromServer;
     }
   }
   if(typeof fetchReasoningChip==='function'&&(!_profileSwitchCompleted||!_profileSwitchChangedProfile)) fetchReasoningChip();
+  if(typeof privatePushRefresh==='function')privatePushRefresh();
   // Fetch available models without blocking session restore. The static HTML
   // options enough for first paint; the dynamic provider list can settle
   // after the saved session is visible.
