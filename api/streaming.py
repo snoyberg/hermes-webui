@@ -14584,6 +14584,9 @@ def _run_agent_streaming(
         # If cancelled, drop all further events except the cancel event itself
         if cancel_event.is_set() and not _success_writeback_committed and event not in ('cancel', 'apperror'):
             return
+        if event in ('done', 'cancel', 'apperror', 'stream_end'):
+            from api.web_push import finish_run
+            finish_run(session_id, stream_id, completed=event == 'done')
         event_id = None
         if run_journal is not None:
             try:
@@ -14806,6 +14809,8 @@ def _run_agent_streaming(
         # session's own record cannot disagree. Guarded: a turn must not die
         # here because a workspace path is malformed.
         s = get_session(session_id)
+        from api.web_push import bind_run
+        bind_run(s, stream_id)
         try:
             _turn_workspace_cwd = str(_resolve_path(workspace, profile=getattr(s, 'profile', None)))
         except Exception:
@@ -19169,6 +19174,8 @@ def _run_agent_streaming(
         # CLI/cron env fallback resumes — same lifecycle slot as the env
         # restore above.
         _reset_turn_session_identity(_turn_session_identity_tokens)
+        from api.web_push import finish_run
+        finish_run(session_id, stream_id)
         with STREAMS_LOCK:
             # ONE list for every per-stream registry (#7302 re-gate): this is the
             # same tuple the chat/start orphan recovery releases, so a registry
