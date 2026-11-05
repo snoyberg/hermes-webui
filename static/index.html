@@ -1340,6 +1340,16 @@
                 <span id="settingsTtsPitchValue" style="font-size:12px;color:var(--muted);min-width:32px;text-align:right">1.0</span>
               </div>
             </div>
+            <div class="settings-field" id="privatePushSettings">
+              <label data-i18n="push_label">Private closed-app notifications</label>
+              <div style="font-size:12px;color:var(--muted);margin-top:4px;line-height:1.5" data-i18n="push_description">Opt in on this device for the selected profile. Generic alerts only, including work started on desktop. Replaces page alerts and sounds for this profile.</div>
+              <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px">
+                <button type="button" class="sm-btn" id="privatePushEnable" onclick="privatePushAction('enable')" disabled data-i18n="push_enable">Enable</button>
+                <button type="button" class="sm-btn" id="privatePushTest" onclick="privatePushAction('test')" disabled data-i18n="notifications_test_btn">Send test</button>
+                <button type="button" class="sm-btn" id="privatePushDisable" onclick="privatePushAction('disable')" disabled data-i18n="push_disable">Disable</button>
+              </div>
+              <div id="privatePushStatus" role="status" aria-live="polite" style="font-size:12px;color:var(--muted);margin-top:8px" data-i18n="push_checking">Checking this device and profile…</div>
+            </div>
             <div class="settings-field">
               <label style="display:flex;align-items:center;gap:8px;cursor:pointer">
                 <input type="checkbox" id="settingsNotificationsEnabled" style="width:15px;height:15px;accent-color:var(--accent)">
@@ -1860,6 +1870,7 @@
 <script src="static/sessions.js?v=__WEBUI_VERSION__" defer></script>
 <script src="static/commands.js?v=__WEBUI_VERSION__" defer></script>
 <script src="static/messages.js?v=__WEBUI_VERSION__" defer></script>
+<script src="static/private_push.js?v=__WEBUI_VERSION__" defer></script>
 <script src="static/extension_settings.js?v=__WEBUI_VERSION__" defer></script>
 <script src="static/panels.js?v=__WEBUI_VERSION__" defer></script>
 <script src="static/onboarding.js?v=__WEBUI_VERSION__" defer></script>
