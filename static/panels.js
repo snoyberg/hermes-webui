@@ -14781,6 +14781,7 @@ async function _restoreCheckpoint(workspace,checkpoint,message){
 
 
 function updateNotificationPermissionStatus(){
+  if(typeof privatePushRefresh==='function')privatePushRefresh();
   const el=$('notificationPermissionStatus');
   const btn=$('notificationPermissionButton');
   const btnWrap=$('notificationPermissionButtonWrap');
