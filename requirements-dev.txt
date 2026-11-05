@@ -3,6 +3,7 @@
 # Runtime dependencies stay in requirements.txt. This file mirrors the Python
 # tools CI installs for contributor validation.
 -r requirements.txt
+-r requirements-push.txt
 pytest
 pytest-timeout
 pytest-asyncio
