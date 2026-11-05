@@ -19918,6 +19918,21 @@ def handle_post(handler, parsed) -> bool:
     if parsed.path == "/api/escape/authorize":
         return _handle_escape_authorize(handler, parsed, body)
 
+    if parsed.path.startswith('/api/push/'):
+        from api.auth import is_auth_enabled
+        from api.web_push import device_api
+        from api.profiles import get_active_profile_name
+        if not is_auth_enabled():
+            return bad(handler, 'Configure WebUI authentication before enabling Web Push', status=403)
+        if not _check_same_origin_browser_request(handler, require_provenance=True):
+            return bad(handler, 'Same-origin browser request required', status=403)
+        try:
+            return j(handler, device_api(parsed.path.rsplit('/', 1)[-1], body, get_active_profile_name()))
+        except ValueError as exc:
+            return bad(handler, str(exc), status=400)
+        except Exception:
+            return bad(handler, 'Push settings unavailable', status=503)
+
     if parsed.path == "/api/updates/check":
         settings = load_settings()
         if not settings.get("check_for_updates", True):
