@@ -19923,6 +19923,10 @@ def handle_post(handler, parsed) -> bool:
         from api.web_push import device_api
         from api.profiles import get_active_profile_name
         if not is_auth_enabled():
+            # Availability is probed during ordinary page boot. An intentionally
+            # unauthenticated server has no push capability to expose or mutate.
+            if parsed.path == '/api/push/status':
+                return j(handler, {'available': False, 'enabled': False})
             return bad(handler, 'Configure WebUI authentication before enabling Web Push', status=403)
         if not _check_same_origin_browser_request(handler, require_provenance=True):
             return bad(handler, 'Same-origin browser request required', status=403)
