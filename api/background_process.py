@@ -2800,11 +2800,17 @@ def _drain_loop() -> None:
         from tools import process_registry as _pr_mod  # noqa: F401
         from tools.process_registry import process_registry
     except Exception as exc:
-        logger.warning("bg_task_complete drain unavailable: %s", exc)
-        return
+        logger.warning("bg_task_complete registry unavailable: %s", exc)
+        process_registry = None
     logger.info("bg_task_complete drain thread started")
-    restore_durable_process_completions(process_registry)
+    if process_registry is not None:
+        restore_durable_process_completions(process_registry)
     while not _DRAIN_STOP.is_set():
+        try:
+            from api.supervisor_completion import sweep
+            sweep()
+        except Exception:
+            logger.warning("supervisor completion sweep failed", exc_info=True)
         # Read the queue defensively: a rebuilt/partially-initialized registry
         # may not expose ``completion_queue`` (mirrors streaming.py's
         # ``getattr(process_registry, 'completion_queue', None)`` guard). Direct
