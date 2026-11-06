@@ -20,7 +20,8 @@ operation is performed by the application. Create an owner-only JSON file:
 ```json
 {
   "private_key_file": "/secure/location/vapid-private.pem",
-  "subject": "mailto:administrator@example.com"
+  "subject": "mailto:administrator@example.com",
+  "completion_preview": false
 }
 ```
 
@@ -89,14 +90,28 @@ consent from a session-open event or a subscription left by another profile.
 
 ## Privacy, ownership, and delivery limits
 
-All notification types use a fixed `Hermes` title and fixed generic copy. The
-server payload schema contains only version, enumerated kind, profile ID, session
-ID and a hashed event identity. There is no title/body/snippet/output field to
-redact. The worker constructs its own fixed text even if a payload contains extra
-fields. Neither pushes nor delivery records contain replies, commands, questions,
-filenames, session titles or tool output. Profile/session identifiers remain
-routing metadata visible to the local store and browser push service; this is not
-an anonymity system.
+All notification types use a fixed `Hermes` title. By default bodies remain
+generic. Administrators may explicitly set `completion_preview: true` in the
+private server configuration to include a bounded final-assistant-response excerpt
+for already opted-in devices/profiles. OS notification settings control preview
+visibility; encryption does not hide a displayed notification from someone looking
+at the screen. Approval, clarification and test alerts always remain generic.
+No user prompt, tool result, session title or internal child output is selected.
+The excerpt comes only from the current run's committed final assistant row after
+its exact user-turn checkpoint, with credential redaction forced on. An unavailable
+or unverifiable final answer falls back to generic copy, never an older answer.
+Credentials must not be intentionally included in assistant replies; redaction is
+not a guarantee that arbitrary secret-looking text can always be recognized.
+
+The payload contains version, enumerated kind, profile/session routing IDs, a
+hashed event identity and optionally a completion-only `preview`. Serialized JSON
+is bounded to 3000 UTF-8 bytes, including escaping and a truncation ellipsis, leaving
+room for standard aes128gcm Web Push encryption overhead. The existing protected
+delivery store retains that same bounded payload with its normal expiry/pruning;
+no separate content backlog or historical backfill is created. Old queued generic
+payloads remain generic. Older workers ignore previews and display generic copy.
+Profile/session identifiers and excerpts are inside the encrypted payload; the
+local protected store can read them. This is not an anonymity system.
 
 Completion is emitted from the existing local/Gateway terminal run owners;
 approval/clarify projections follow the canonical pending owners. Internal
@@ -121,7 +136,7 @@ allowing unbounded growth.
 request. Neither proves OS display or that the user answered. Each valid received
 push for an enrolled profile calls `showNotification`, including transport retries:
 [WebKit requires user-visible notifications for received pushes](https://webkit.org/blog/12945/meet-web-push/).
-The worker uses a stable event tag and `renotify: false` to replace the same generic
+The worker uses a stable event tag and `renotify: false` to replace the same
 notification. IndexedDB retains attempted events across worker restarts; replays
 also request `silent: true` instead of another audible alert. If a notification
 was dismissed, a retry can recreate it silently. An uncertain/failed display keeps
@@ -133,7 +148,7 @@ and operating systems control replacement, sound, and supported options.
 Disable stops future server admission and removes unsent deliveries, but cannot
 recall an already received/in-flight push or a display already underway. Invalid
 payloads, foreign/disabled profiles and unavailable consent storage do not get a
-notification: the worker never infers consent, uses supplied content, or re-enables
+notification: the worker never infers consent, uses arbitrary title/body fields, or re-enables
 a profile to satisfy visibility policy. Those exceptional receipts cannot meet
 WebKit's visibility requirement; the browser may revoke the shared subscription,
 affecting other enrolled profiles until explicit re-enrollment. This privacy/consent
