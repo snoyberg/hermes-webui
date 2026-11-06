@@ -224,6 +224,8 @@ self.addEventListener('push',event=>{
        ||!privatePushProfile(data.profile)||typeof data.session!=='string'
        ||!(/^[A-Za-z0-9_-]{1,128}$/.test(data.session)||(data.kind==='test'&&data.session===''))
        ||typeof data.event!=='string'||!/^[a-f0-9]{64}$/.test(data.event))return;
+    if(data.preview!==undefined&&(data.kind!=='complete'||typeof data.preview!=='string'
+       ||!data.preview.trim()||new TextEncoder().encode(data.preview).length>3000))return;
     const key='event:'+data.event;
     const claimed=await privatePushState((store,done)=>{
       const enabled=store.get('profile:'+data.profile);
@@ -246,11 +248,11 @@ self.addEventListener('push',event=>{
       };
     });
     if(!claimed)return;
-    const body=data.kind==='complete'?'A response is ready. Open Hermes to continue.'
+    const body=data.kind==='complete'?(data.preview||'A response is ready. Open Hermes to continue.')
       :data.kind==='test'?'Private push notifications are ready.'
       :'Open Hermes to review a pending request.';
     // WebKit requires a user-visible notification for every received push.
-    // Retries replace the same generic notification without requesting sound.
+    // Retries replace the same notification without requesting sound.
     await self.registration.showNotification('Hermes',{
       body,tag:'hermes-push-'+data.event,renotify:false,silent:claimed.replay,
       icon:new URL('static/favicon-192.png',self.registration.scope).href,
