@@ -1,4 +1,4 @@
-"""Opt-in, content-free Web Push delivery. No Agent/config imports at module load."""
+"""Opt-in private Web Push delivery. No Agent/config imports at module load."""
 from __future__ import annotations
 
 import hashlib
@@ -15,6 +15,54 @@ TTL = 300
 MAX_ATTEMPTS = 4
 MAX_RECIPIENTS = 128
 MAX_DELIVERIES = 10000
+MAX_PAYLOAD_BYTES = 3000  # Leaves room for aes128gcm overhead within 4096 bytes.
+
+
+def completion_text(messages, turn_token):
+    """Read only the settled final row of this exact turn, never older prose."""
+    if not turn_token or not isinstance(messages, list) or len(messages) < 2:
+        return None
+    last_user = next((m for m in reversed(messages) if isinstance(m, dict)
+                      and m.get('role') == 'user'), None)
+    if not last_user or last_user.get('_active_turn_token') != turn_token:
+        return None
+    final = messages[-1]
+    if (not isinstance(final, dict) or final.get('role') != 'assistant'
+            or final.get('tool_calls') or final.get('function_call') or final.get('_error')):
+        return None
+    content = final.get('content')
+    if isinstance(content, list):
+        content = '\n'.join(part['text'] for part in content if isinstance(part, dict)
+                            and part.get('type') == 'text' and isinstance(part.get('text'), str))
+    if not isinstance(content, str) or not content.strip():
+        return None
+    from api.helpers import _redact_text
+    return _redact_text(content, _enabled=True).strip()
+
+
+def encode_payload(payload, preview=None):
+    """Bound the actual JSON/UTF-8 cost, including escaped control characters."""
+    def encode():
+        return json.dumps(payload, ensure_ascii=False, separators=(',', ':'))
+    if preview:
+        # Lone surrogates cannot be encoded as UTF-8; replace before measuring.
+        preview = preview.encode('utf-8', errors='replace').decode('utf-8')
+        low, high = 0, min(len(preview), MAX_PAYLOAD_BYTES)
+        while low < high:
+            mid = (low + high + 1) // 2
+            payload['preview'] = preview[:mid] + ('…' if mid < len(preview) else '')
+            if len(encode().encode('utf-8')) <= MAX_PAYLOAD_BYTES:
+                low = mid
+            else:
+                high = mid - 1
+        if low:
+            payload['preview'] = preview[:low] + ('…' if low < len(preview) else '')
+        else:
+            payload.pop('preview', None)
+    encoded = encode()
+    if len(encoded.encode('utf-8')) > MAX_PAYLOAD_BYTES:
+        raise ValueError('Push routing payload is too large')
+    return encoded
 
 
 def validate_endpoint(endpoint):
@@ -93,7 +141,7 @@ def event_key(*parts):
 
 
 class PushStore:
-    """One private SQLite owner; all payloads are constructed from typed routing IDs."""
+    """One private SQLite owner for routing and bounded completion excerpts."""
 
     def __init__(self, directory):
         self.directory = Path(directory)
@@ -145,16 +193,17 @@ class PushStore:
             db.execute('DELETE FROM recipients WHERE device=? AND profile=?', (device, profile))
             db.execute('DELETE FROM deliveries WHERE device=? AND profile=?', (device, profile))
 
-    def enqueue(self, profile, session, event, kind, *, device=None, now=None, expires_at=None):
+    def enqueue(self, profile, session, event, kind, *, device=None, now=None, expires_at=None, preview=None):
         if kind not in KINDS:
             raise ValueError('Unknown push kind')
+        if preview is not None and (kind != 'complete' or not isinstance(preview, str)):
+            raise ValueError('Only completions may carry a response excerpt')
         now = time.time() if now is None else now
         expires = min(now + TTL, expires_at) if expires_at else now + TTL
         if expires <= now:
             return 0
-        # No free-text title/body/snippet/error can enter the persistence API.
-        payload = json.dumps(dict(v=1, kind=kind, profile=profile, session=session,
-                                  event=event_key(profile, session, event, kind)), separators=(',', ':'))
+        payload = encode_payload(dict(v=1, kind=kind, profile=profile, session=session,
+                                      event=event_key(profile, session, event, kind)), preview)
         count = 0
         with self.connect() as db:
             db.execute('BEGIN IMMEDIATE')
@@ -239,11 +288,12 @@ _owner_lock = threading.RLock()
 
 
 class PushService:
-    def __init__(self, store, private_key, public_key, subject):
+    def __init__(self, store, private_key, public_key, subject, *, completion_preview=False):
         self.store = store
         self.private_key = private_key
         self.public_key = public_key
         self.subject = subject
+        self.completion_preview = completion_preview
         self.stopped = threading.Event()
         self.thread = None
 
@@ -352,7 +402,7 @@ def attention(session_id, kind, head):
         pass  # Do not mark a failed enqueue seen; the owner can retry its projection.
 
 
-def finish_run(session_id, run_id, *, completed=False):
+def finish_run(session_id, run_id, *, completed=False, messages=None, turn_token=None):
     if _service is None:
         return
     try:
@@ -364,7 +414,8 @@ def finish_run(session_id, run_id, *, completed=False):
             for kind in ('approval', 'clarify'):
                 _service.store.cancel_attention(profile, session_id, kind)
             if completed:
-                _service.store.enqueue(profile, session_id, run_id, 'complete')
+                preview = completion_text(messages, turn_token) if _service.completion_preview else None
+                _service.store.enqueue(profile, session_id, run_id, 'complete', preview=preview)
             _owners.pop(session_id, None)
     except Exception:
         pass
@@ -445,6 +496,9 @@ def start(state_dir):
         from py_vapid import Vapid
         from pywebpush import webpush  # noqa: F401
         config = json.loads(_private_file(config_path))
+        completion_preview = config.get('completion_preview', False)
+        if not isinstance(completion_preview, bool):
+            raise ValueError('completion_preview must be a boolean')
         subject = config['subject']
         if not isinstance(subject, str) or not subject.startswith('mailto:') or len(subject) > 254:
             raise ValueError('A VAPID mailto contact is required')
@@ -452,7 +506,8 @@ def start(state_dir):
         vapid = Vapid(private_key=key)
         public = base64.urlsafe_b64encode(vapid.public_key.public_bytes(
             serialization.Encoding.X962, serialization.PublicFormat.UncompressedPoint)).rstrip(b'=').decode()
-        service = PushService(PushStore(Path(state_dir) / 'push'), vapid, public, subject)
+        service = PushService(PushStore(Path(state_dir) / 'push'), vapid, public, subject,
+                              completion_preview=completion_preview)
         # Pending attention is process-owned, unlike settled completion. On restart
         # fail closed until a restored run's canonical owner projects it again.
         with service.store.connect() as db:
