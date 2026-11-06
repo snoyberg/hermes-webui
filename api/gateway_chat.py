@@ -3257,7 +3257,9 @@ def _run_gateway_chat_streaming(
             return
         if event in ('done', 'cancel', 'error', 'apperror', 'stream_end'):
             from api.web_push import finish_run
-            finish_run(session_id, stream_id, completed=event == 'done')
+            finish_run(session_id, stream_id, completed=event == 'done',
+                       messages=getattr(s, 'messages', None) if event == 'done' else None,
+                       turn_token=active_turn_identity.get('token') if event == 'done' else None)
         if event == "apperror" and isinstance(data, dict):
             data = data.copy()
             data.setdefault("session_id", session_id)
