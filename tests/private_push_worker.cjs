@@ -12,7 +12,7 @@ const self = {
   clients: {claim(){}, matchAll:async()=>[], openWindow:async url=>opened.push(url)},
   addEventListener: (type, handler)=>handlers[type]=handler,
 };
-const context=vm.createContext({self,indexedDB,URL,console,Date,Promise});
+const context=vm.createContext({self,indexedDB,URL,console,Date,Promise,TextEncoder});
 function loadWorker(){vm.runInContext(fs.readFileSync('static/sw.js','utf8'),context);}
 loadWorker();
 async function dispatch(type, extra){
@@ -40,10 +40,28 @@ async function dispatch(type, extra){
   assert.equal(shown.length,2, 'foreign profile displayed');
   await dispatch('notificationclick', {notification:{close(){},data:shown[0][1].data}});
   assert.equal(opened[0],'https://hermes.example/app/session/desktop-started?profile=work');
+  const complete={v:1,kind:'complete',profile:'work',session:'desktop-started',event:'d'.repeat(64),preview:'Final answer 🐕'};
+  await dispatch('push',{data:{json:()=>complete}});
+  assert.equal(shown.at(-1)[1].body,complete.preview);
+  await dispatch('push',{data:{json:()=>complete}});
+  assert.equal(shown.at(-1)[1].silent,true);
+  assert.equal(shown.at(-1)[1].tag,'hermes-push-'+complete.event);
+  assert(!JSON.stringify(shown.at(-1)[1].data).includes('Final answer'));
+  const beforeInvalid=shown.length;
+  for(const invalid of [42,'😀'.repeat(1000),'']){
+    await dispatch('push',{data:{json:()=>({...complete,preview:invalid})}});
+  }
+  for(const kind of ['approval','clarify','test']){
+    await dispatch('push',{data:{json:()=>({...complete,kind})}});
+  }
+  assert.equal(shown.length,beforeInvalid,'invalid/attention excerpts must fail closed');
+  await dispatch('push',{data:{json:()=>({...complete,preview:undefined,event:'e'.repeat(64)})}});
+  assert.equal(shown.at(-1)[1].body,'A response is ready. Open Hermes to continue.');
+  const beforeDisable=shown.length;
   await dispatch('message', {data:{type:'private-push-profile',profile:'work',enabled:false},
     source:{url:'https://hermes.example/app/'}, ports:[{postMessage(){}}]});
   await dispatch('push', {data:{json:()=>({...payload,event:'c'.repeat(64)})}});
-  assert.equal(shown.length,2,'disabled profile displayed');
+  assert.equal(shown.length,beforeDisable,'disabled profile displayed');
   const originalDatabase=context.privatePushDatabase;
   let release,entered,secondEntered=false,calls=0;
   const firstEntered=new Promise(resolve=>{entered=resolve;});
