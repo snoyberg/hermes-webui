@@ -156,7 +156,7 @@ def _sweep() -> int:
             if not changed:
                 continue
 
-            def on_admitted(s, stream_id):
+            def on_admitted(s, stream_id, *, row=row):
                 if str(s.profile or "") != row["profile"]:
                     raise ValueError("session profile changed during admission")
                 with _connect() as db:
