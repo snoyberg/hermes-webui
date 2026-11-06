@@ -8,7 +8,7 @@ const LOCALES = {
     composer_placeholder_read_only: 'Read-only in WebUI',
     composer_read_only_connection: 'How to connect',
     push_label: 'Private closed-app notifications',
-    push_description: 'Opt in on this device for the selected profile. Generic alerts only, including work started on desktop. Replaces page alerts and sounds for this profile.',
+    push_description: 'Opt in on this device for the selected profile, including work started on desktop. Response previews may be enabled by the server; pending requests stay generic. Your OS controls preview visibility. Replaces page alerts and sounds for this profile.',
     push_enable: 'Enable',
     push_disable: 'Disable',
     push_checking: 'Checking this device and profile…',
