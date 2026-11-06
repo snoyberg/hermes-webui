@@ -190,12 +190,133 @@ def test_real_terminal_emitter_queues_completion_without_page(tmp_path, monkeypa
     node = next(n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef) and n.name == function_name)
     namespace = dict(cancel_event=threading.Event(), _success_writeback_committed=True,
                      success_writeback_committed=True, run_journal=None, q=queue.Queue(),
-                     session_id='desktop', stream_id='run1', _settle_pending_steer=lambda: None)
+                     session_id='desktop', stream_id='run1', _settle_pending_steer=lambda: None,
+                     s=SimpleNamespace(messages=[]), _active_turn_identity={}, active_turn_identity={})
     exec(compile(ast.Module(body=[node], type_ignores=[]), filename, 'exec'), namespace)
     namespace[function_name]('done', {'session': {'messages': ['PRIVATE OUTPUT']}})
     assert len(service.store.pending()) == 1
     assert service.store.pending()[0]['kind'] == 'complete'
     assert 'PRIVATE OUTPUT' not in service.store.path.read_bytes().decode(errors='ignore')
+
+
+@pytest.mark.parametrize('filename,function_name', [('streaming.py', 'put'), ('gateway_chat.py', 'put_gateway_event')])
+def test_terminal_emitter_previews_only_current_settled_final(tmp_path, monkeypatch, filename, function_name):
+    import ast
+    import queue
+    import threading
+    from pathlib import Path
+    from types import SimpleNamespace
+    push = module()
+    service = push.PushService(push.PushStore(tmp_path / 'push'), None, 'public', 'mailto:a@example.com',
+                               completion_preview=True)
+    monkeypatch.setattr(push, '_service', service)
+    service.store.enroll('phone', 'work', {'endpoint': 'synthetic'})
+    session = SimpleNamespace(session_id='desktop', profile='work', read_only=False, messages=[
+        {'role': 'user', 'content': 'OLD PROMPT', '_active_turn_token': 'old'},
+        {'role': 'assistant', 'content': 'OLD ANSWER'},
+        {'role': 'user', 'content': 'PRIVATE PROMPT', '_active_turn_token': 'run1:100'},
+        {'role': 'assistant', 'content': 'INTERMEDIATE', 'tool_calls': [{'name': 'shell'}]},
+        {'role': 'tool', 'content': 'PRIVATE TOOL RESULT'},
+        {'role': 'assistant', 'content': 'Final answer 🐕'},
+    ])
+    push.bind_run(session, 'run1')
+    tree = ast.parse((Path(__file__).parents[1] / 'api' / filename).read_text())
+    node = next(n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef) and n.name == function_name)
+    namespace = dict(cancel_event=threading.Event(), _success_writeback_committed=True,
+                     success_writeback_committed=True, run_journal=None, q=queue.Queue(), s=session,
+                     session_id='desktop', stream_id='run1', _settle_pending_steer=lambda: None,
+                     _active_turn_identity={'token': 'run1:100'}, active_turn_identity={'token': 'run1:100'})
+    exec(compile(ast.Module(body=[node], type_ignores=[]), filename, 'exec'), namespace)
+    namespace[function_name]('token', {'text': 'MIDSTREAM'})
+    assert not service.store.pending()
+    namespace[function_name]('done', {'session': {'messages': session.messages}})
+    row, = service.store.pending()
+    assert json.loads(row['payload'])['preview'] == 'Final answer 🐕'
+    assert all(text not in row['payload'] for text in ('PRIVATE', 'OLD', 'INTERMEDIATE', 'MIDSTREAM'))
+    sent = []
+    service.store.deliver(lambda sub, payload, ttl: sent.append(json.loads(payload)) or 201)
+    assert sent[0]['preview'] == 'Final answer 🐕'
+
+
+@pytest.mark.parametrize('text', ['😀' * 10000, '\"\\\n\x00' * 10000, 'שלום é' * 10000, '\ud800' * 5000])
+def test_excerpt_json_utf8_and_encrypted_payload_ceiling(tmp_path, monkeypatch, text):
+    push = module()
+    store = push.PushStore(tmp_path / 'push')
+    store.enroll('phone', 'work', {'endpoint': 'synthetic'})
+    store.enqueue('work', 'session', 'run', 'complete', preview=text)
+    row, = store.pending()
+    assert len(row['payload'].encode('utf-8')) <= push.MAX_PAYLOAD_BYTES
+    assert json.loads(row['payload'])['preview'].endswith('…')
+    # Exercise actual aes128gcm framing, not only a plaintext size estimate.
+    from cryptography.hazmat.primitives.asymmetric import ec
+    from cryptography.hazmat.primitives import serialization
+    from py_vapid import Vapid
+    import base64
+    key = ec.generate_private_key(ec.SECP256R1()).public_key().public_bytes(
+        serialization.Encoding.X962, serialization.PublicFormat.UncompressedPoint)
+    enc = lambda b: base64.urlsafe_b64encode(b).rstrip(b'=').decode()
+    vapid = Vapid()
+    vapid.generate_keys()
+    from types import SimpleNamespace
+    def post(self, endpoint, data, headers, timeout):
+        assert len(data) <= 4096
+        assert headers['content-encoding'] == 'aes128gcm'
+        return SimpleNamespace(status_code=201, text='', headers={})
+    monkeypatch.setattr(push.PinnedSession, 'post', post)
+    assert push.send_push({'endpoint': 'https://web.push.apple.com/Qsynthetic',
+                           'keys': {'p256dh': enc(key), 'auth': enc(b'x'*16)}},
+                          row['payload'], 30, vapid, 'mailto:a@example.com') == 201
+
+
+@pytest.mark.parametrize('final', [
+    {'role': 'tool', 'content': 'TOOL'}, {'role': 'user', 'content': 'PROMPT'},
+    {'role': 'assistant', 'content': 'CALL', 'tool_calls': [{}]},
+    {'role': 'assistant', 'content': 'ERROR', '_error': True},
+    {'role': 'assistant', 'content': ''},
+])
+def test_no_preview_of_nonfinal_or_previous_turn(final):
+    push = module()
+    messages = [{'role': 'assistant', 'content': 'PREVIOUS ANSWER'},
+                {'role': 'user', '_active_turn_token': 'current', 'content': 'PROMPT'}, final]
+    assert push.completion_text(messages, 'current') is None
+    assert push.completion_text(messages, 'old') is None
+
+
+def test_preview_consent_stale_owner_and_attention_fences(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    push = module()
+    service = push.PushService(push.PushStore(tmp_path / 'push'), None, 'public', 'mailto:a@example.com')
+    monkeypatch.setattr(push, '_service', service)
+    service.store.enroll('phone', 'work', {'endpoint': 'synthetic'})
+    messages = [{'role': 'user', '_active_turn_token': 'current', 'content': 'PROMPT'},
+                {'role': 'assistant', 'content': 'Final'}]
+    session = SimpleNamespace(session_id='desktop', profile='work', read_only=False)
+    push.bind_run(session, 'run1')
+    push.finish_run('desktop', 'run1', completed=True, messages=messages, turn_token='current')
+    assert 'preview' not in json.loads(service.store.pending()[0]['payload'])  # default opt-out
+    service.completion_preview = True
+    push.bind_run(session, 'run2')
+    push.finish_run('desktop', 'run1', completed=True, messages=messages, turn_token='current')
+    assert len(service.store.pending()) == 1
+    service.store.disable('phone', 'work')
+    push.finish_run('desktop', 'run2', completed=True, messages=messages, turn_token='current')
+    assert not service.store.pending()
+    for kind in ('approval', 'clarify', 'test'):
+        with pytest.raises(ValueError):
+            service.store.enqueue('work', 'desktop', 'run', kind, preview='PRIVATE')
+
+
+def test_completion_redacts_credentials_and_ignores_reasoning_blocks():
+    push = module()
+    key = 'sk-' + 'a' * 48
+    messages = [{'role': 'user', '_active_turn_token': 'current', 'content': 'PROMPT'},
+                {'role': 'assistant', 'content': [
+                    {'type': 'thinking', 'thinking': 'PRIVATE REASONING'},
+                    {'type': 'text', 'text': 'Answer ' + key}]}]
+    excerpt = push.completion_text(messages, 'current')
+    assert excerpt.startswith('Answer ')
+    assert key not in excerpt
+    assert 'PRIVATE REASONING' not in excerpt
 
 
 def test_real_attention_owner_projection_hooks(tmp_path, monkeypatch):
@@ -310,7 +431,8 @@ def test_service_worker_actual_javascript(fixture):
     assert result.returncode == 0, result.stdout + result.stderr
 
 
-def test_configuration_is_opt_in_and_private_and_lifecycle_stops(tmp_path, monkeypatch):
+@pytest.mark.parametrize('completion_preview', [False, True])
+def test_configuration_is_opt_in_and_private_and_lifecycle_stops(tmp_path, monkeypatch, completion_preview):
     push = module()
     monkeypatch.setattr(push, '_service', None)
     monkeypatch.delenv('HERMES_WEBUI_PUSH_CONFIG', raising=False)
@@ -324,12 +446,14 @@ def test_configuration_is_opt_in_and_private_and_lifecycle_stops(tmp_path, monke
                                          serialization.PrivateFormat.PKCS8, serialization.NoEncryption()))
     private.chmod(0o600)
     config = tmp_path / 'push.json'
-    config.write_text(json.dumps({'private_key_file': str(private), 'subject': 'mailto:admin@example.com'}))
+    config.write_text(json.dumps({'private_key_file': str(private), 'subject': 'mailto:admin@example.com',
+                                 'completion_preview': completion_preview}))
     config.chmod(0o600)
     monkeypatch.setenv('HERMES_WEBUI_PUSH_CONFIG', str(config))
     push.start(tmp_path / 'webui')
     try:
         assert push._service is not None
+        assert push._service.completion_preview is completion_preview
         assert push._service.thread.is_alive()
         assert push._service.store.path.stat().st_mode & 0o777 == 0o600
     finally:
