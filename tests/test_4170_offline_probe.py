@@ -37,8 +37,8 @@ def test_recovery_loop_probes_even_when_browser_reports_offline():
     assert "_probeOfflineRecovery()" in body
     assert "if(!_browserReportsOnline()){showOfflineBanner('browser');return false;}" not in body
     assert body.find("_probeOfflineRecovery()") < body.find("showOfflineBanner(")
-    assert "if(ok){_offlineFetchProbeFailures=0;if(!_offlineVisible)return true;_stopOfflineProbeTimer();await _recoverFromOfflineSoftly();return true;}" in body
-    assert "showOfflineBanner(_browserReportsOnline()?'network':'browser')" in body
+    assert "if(ok){_offlineFetchProbeFailures=0;if(!_offlineVisible)return true;_stopOfflineProbeTimer();return await _recoverFromOfflineSoftly();}" in body
+    assert "showOfflineBanner(_offlineProbeState==='auth'?'auth':_browserReportsOnline()?'network':'browser')" in body
 
 
 def test_probe_backed_browser_banner_helper_uses_health_as_source_of_truth():
