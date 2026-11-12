@@ -9,22 +9,18 @@ def read(path: str) -> str:
     return (ROOT / path).read_text(encoding="utf-8")
 
 
-def test_workspace_api_401_redirect_uses_relative_login_path():
+def test_workspace_api_401_preserves_tab():
     src = read("static/workspace.js")
     assert "res.status===401" in src
-    assert "window.location.href='login?next='" in src, (
-        "workspace api() must redirect to relative login?next= so /hermes/ "
-        "does not escape to the personal site root /login."
-    )
-    assert "window.location.href='/login?next='" not in src
+    assert "showAuthRequiredBanner()" in src
+    assert "window.location.href=" not in src
 
 
-def test_ui_401_redirect_helper_uses_relative_login_path():
+def test_ui_401_login_action_is_subpath_relative():
     src = read("static/ui.js")
     assert "function _redirectIfUnauth" in src
-    assert "window.location.href='login?next='" in src, (
-        "UI auth-expiry redirect must stay under the current subpath mount."
-    )
+    assert "new URL('login',base)" in src
+    assert "url.searchParams.set('next',location.pathname+location.search)" in src
     assert "window.location.href='/login?next='" not in src
 
 
