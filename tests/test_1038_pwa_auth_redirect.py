@@ -11,7 +11,7 @@ These are static regression tests that verify the JS source contains the
 correct guard patterns.
 """
 
-import re
+
 from pathlib import Path
 
 ROOT = Path(__file__).parent.parent
@@ -26,16 +26,13 @@ def _ui_js() -> str:
 
 
 class TestPWAAuthRedirect:
-    def test_workspace_js_has_401_redirect(self):
-        """api() in workspace.js must redirect to login on 401."""
+    def test_workspace_js_has_non_destructive_401_recovery(self):
+        """api() must surface authentication without navigating the live tab."""
         src = _workspace_js()
-        # Guard must appear inside the !res.ok block, before throwing
-        assert "res.status===401" in src, \
-            "workspace.js api() must check res.status===401"
-        assert "window.location.href='login" in src or 'window.location.href="login' in src, \
-            "workspace.js api() must redirect to login on 401"
-        assert "window.location.href='/login" not in src and 'window.location.href="/login' not in src, \
-            "workspace.js api() must not escape subpath mounts by redirecting to root /login"
+        assert "res.status===401" in src
+        assert "showAuthRequiredBanner()" in src
+        assert "err.status=401" in src
+        assert "window.location.href=" not in src
 
     def test_workspace_js_401_before_throw(self):
         """The 401 redirect must come before any error throw."""

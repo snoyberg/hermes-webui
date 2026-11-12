@@ -506,9 +506,12 @@
       <div class="offline-copy">
         <strong id="offlineTitle" data-i18n="offline_title">Connection lost</strong>
         <span id="offlineDetails" data-i18n="offline_browser_detail">Your browser reports that this device is offline.</span>
-        <span id="offlineAutorefresh" data-i18n="offline_autorefresh">I will refresh this page automatically when Hermes is reachable again.</span>
+        <span id="offlineAutorefresh" data-i18n="offline_reconnect">This tab will reconnect automatically when access is restored.</span>
       </div>
-      <button class="offline-action" id="offlineCheckNow" type="button" onclick="checkOfflineRecoveryNow()" data-i18n="offline_check_now">Check now</button>
+      <div class="offline-actions">
+        <a class="offline-action" id="offlineSignIn" target="_blank" rel="noopener noreferrer" data-i18n="auth_required_action" hidden>Sign in again</a>
+        <button class="offline-action" id="offlineCheckNow" type="button" onclick="checkOfflineRecoveryNow()" data-i18n="offline_check_now">Check now</button>
+      </div>
     </div>
     <div class="agent-health-banner" id="agentHealthBanner" role="alert" aria-live="assertive" hidden>
       <div class="agent-health-copy">
