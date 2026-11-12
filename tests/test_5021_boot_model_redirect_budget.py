@@ -260,6 +260,8 @@ eval(bootDropdownBlock
     '  globalThis._startBootModelDropdown=()=>{'
   )
 );
+globalThis.authBanners=0;
+globalThis.showAuthRequiredBanner=()=>{globalThis.authBanners++;};
 eval(redirectIfUnauthLine.replace(
   'function _redirectIfUnauth(res){',
   'globalThis._redirectIfUnauth=function _redirectIfUnauth(res){'
@@ -389,6 +391,7 @@ async function runBootAttempt(attempt, redirects, storage, fetchQueue, jsonCalls
   }
 
   process.stdout.write(JSON.stringify({
+    authBanners:globalThis.authBanners,
     redirects,
     results,
     jsonCalls: jsonCalls.count,
@@ -478,7 +481,7 @@ def test_boot_model_success_still_stores_active_provider(driver_path):
     assert payload["jsonCalls"] == 1
 
 
-def test_post_boot_model_refresh_keeps_normal_401_redirect(driver_path):
+def test_post_boot_model_refresh_preserves_tab_on_401(driver_path):
     payload = _run(
         driver_path,
         {
@@ -486,7 +489,8 @@ def test_post_boot_model_refresh_keeps_normal_401_redirect(driver_path):
         },
     )
 
-    assert payload["redirects"] == ["login?next=%2Fsession%2Fabc%3Fworkspace%3Dtest"]
+    assert payload["redirects"] == []
+    assert payload["authBanners"] == 1
     assert payload["jsonCalls"] == 0
     assert payload["storage"] == {}
     assert "window._ensureModelDropdownReady=_startModelDropdown;" in BOOT_JS.read_text(encoding="utf-8")
