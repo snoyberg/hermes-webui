@@ -8631,6 +8631,7 @@ function ensureSessionEventsSSE(){
       _scheduleSessionEventsRefresh(eventTargetsActiveSession?'event-active-session':'event', {force:true, refreshActive:true});
     });
     _sessionEventsSSE.onerror = () => {
+      if(typeof _showOfflineBannerIfProbeFails==='function')void _showOfflineBannerIfProbeFails('network',{requireConsecutiveFailures:false});
       _sessionEventsNeedsRefreshOnOpen = true;
       _closeSessionEventsSSE();
       if(_sessionEventsReconnectTimer) return;
