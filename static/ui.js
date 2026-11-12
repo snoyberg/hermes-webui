@@ -32,6 +32,37 @@ let _offlineProbeTimer=null;
 let _offlineChecking=false;
 let _offlineProbePromise=null;
 let _offlineHealthProbePromise=null;
+let _offlineProbeState='network'; // ready | auth | network; never infer backend health from 401
+function _appRequestUrl(input){
+  try{
+    const url=new URL(input instanceof Request?input.url:input,document.baseURI||location.href);
+    const base=new URL('.',document.baseURI||location.href);
+    if(url.origin!==location.origin||base.origin!==location.origin)return null;
+    const path=url.pathname.slice(base.pathname.length);
+    return url.pathname.startsWith(base.pathname)&&(path==='health'||path.startsWith('api/'))?url:null;
+  }catch(_){return null;}
+}
+function _appFetchOptions(input,init={}){
+  init=init||{};
+  const opts={...init};
+  delete opts.webuiAuthRecovery;
+  if(_appRequestUrl(input)){
+    const headers=new Headers(init.headers!==undefined?init.headers:(input instanceof Request?input.headers:undefined));
+    if(!headers.has('X-Requested-With'))headers.set('X-Requested-With','XMLHttpRequest');
+    opts.headers=headers;
+  }
+  return opts;
+}
+function _authRecoveryLoginUrl(){
+  const base=new URL('.',document.baseURI||location.href);
+  // A foreign <base> must not turn the sign-in action into an external link.
+  if(base.origin!==location.origin)return null;
+  const url=new URL('login',base);
+  const path=(location.pathname||'').replace(/\/+$/,'');
+  if(!/(?:^|\/)login$/.test(path))url.searchParams.set('next',location.pathname+location.search);
+  return url.href;
+}
+function showAuthRequiredBanner(){showOfflineBanner('auth');}
 let _offlineFetchProbeFailures=0;
 let _offlineRawFetch=null;
 let _offlineFetchPatched=false;
@@ -63,12 +94,21 @@ function _setOfflineChecking(checking){
 function _renderOfflineBanner(){
   const banner=$('offlineBanner');
   if(!banner)return;
+  const auth=_offlineReason==='auth';
   const detail=$('offlineDetails');
-  if(detail)detail.textContent=t(_offlineReason==='browser'?'offline_browser_detail':'offline_network_detail');
+  if(detail)detail.textContent=t(auth?'auth_required_detail':_offlineReason==='browser'?'offline_browser_detail':'offline_network_detail');
   const title=$('offlineTitle');
-  if(title)title.textContent=t('offline_title');
+  if(title)title.textContent=t(auth?'auth_required_title':'offline_title');
   const auto=$('offlineAutorefresh');
-  if(auto)auto.textContent=t('offline_autorefresh');
+  if(auto)auto.textContent=t('offline_reconnect');
+  const signIn=$('offlineSignIn');
+  if(signIn){
+    const url=auth?_authRecoveryLoginUrl():null;
+    signIn.hidden=!url;
+    if(url)signIn.href=url;
+    else signIn.removeAttribute('href');
+    signIn.textContent=t('auth_required_action');
+  }
   _setOfflineChecking(_offlineChecking);
   banner.hidden=false;
   banner.classList.add('visible');
@@ -105,10 +145,24 @@ async function _probeOfflineRecovery(){
     try{ctrl=(typeof AbortController!=='undefined')?new AbortController():null;}catch(_){ctrl=null;}
     if(ctrl)timer=setTimeout(()=>{try{ctrl.abort();}catch(_){}},OFFLINE_HEALTH_TIMEOUT_MS);
     try{
-      const opts={cache:'no-store',credentials:'include'};
+      _offlineProbeState='network';
+      const opts={cache:'no-store',credentials:'include',redirect:'error'};
       if(ctrl)opts.signal=ctrl.signal;
-      const res=await fetcher(_offlineHealthUrl(),opts);
-      return !!(res&&res.ok);
+      const healthUrl=_offlineHealthUrl();
+      const res=await fetcher(healthUrl,_appFetchOptions(healthUrl,opts));
+      if(res&&res.status===401){_offlineProbeState='auth';return false;}
+      if(!res||!res.ok)return false;
+      const health=await res.json();
+      if(!health||health.status!=='ok')return false;
+      // /health is public under native WebUI auth. Confirm protected access too.
+      const apiUrl=new URL('api/profile/active',document.baseURI||location.href).href;
+      const access=await fetcher(apiUrl,_appFetchOptions(apiUrl,opts));
+      if(access&&access.status===401){_offlineProbeState='auth';return false;}
+      if(!access||!access.ok)return false;
+      const profile=await access.json();
+      if(!profile||typeof profile.name!=='string')return false;
+      _offlineProbeState='ready';
+      return true;
     }catch(_){return false;}
     finally{if(timer)clearTimeout(timer);}
   })();
@@ -124,9 +178,10 @@ async function _showOfflineBannerIfProbeFails(reason,opts){
   if(visibleAtStart)_setOfflineChecking(false);
   if(ok){
     _offlineFetchProbeFailures=0;
-    if(_offlineVisible){_stopOfflineProbeTimer();await _recoverFromOfflineSoftly();}
+    if(_offlineVisible){_stopOfflineProbeTimer();return await _recoverFromOfflineSoftly();}
     return true;
   }
+  if(_offlineProbeState==='auth'){showAuthRequiredBanner();return false;}
   if(!visibleAtStart&&requireConsecutiveFailures){
     _offlineFetchProbeFailures+=1;
     if(_offlineFetchProbeFailures<OFFLINE_FETCH_FAILURES_BEFORE_BANNER)return false;
@@ -141,8 +196,8 @@ async function checkOfflineRecoveryNow(){
     _setOfflineChecking(true);
     const ok=await _probeOfflineRecovery();
     _setOfflineChecking(false);
-    if(ok){_offlineFetchProbeFailures=0;if(!_offlineVisible)return true;_stopOfflineProbeTimer();await _recoverFromOfflineSoftly();return true;}
-    showOfflineBanner(_browserReportsOnline()?'network':'browser');
+    if(ok){_offlineFetchProbeFailures=0;if(!_offlineVisible)return true;_stopOfflineProbeTimer();return await _recoverFromOfflineSoftly();}
+    showOfflineBanner(_offlineProbeState==='auth'?'auth':_browserReportsOnline()?'network':'browser');
     return false;
   })();
   try{return await _offlineProbePromise;}
@@ -164,13 +219,15 @@ async function checkOfflineRecoveryNow(){
 // recover — we just need to reattach. This does the soft path: hide the
 // banner, restart the gateway SSE (bfcache/background kills the connection),
 // and re-fetch the active session so any messages that landed while we were
-// away appear. A full reload is the fallback only if the soft path throws.
+// away appear. A failed soft path remains retryable without discarding this tab.
 async function _recoverFromOfflineSoftly(){
   try{
+    // The explicit update/reload UI owns navigation; background probes do not.
+    if(window._restartingForUpdate){_startOfflineProbeTimer();return false;}
     _hideOfflineBanner();
     if(typeof startGatewaySSE==='function') startGatewaySSE();
     if(S.session && typeof refreshSession==='function'){
-      await refreshSession();
+      await refreshSession({recovery:true});
     }
     // After refreshSession() sets S.activeStreamId, reattach if a stream is live.
     // The server buffers events while no subscriber is attached (#2307/#3863).
@@ -182,14 +239,13 @@ async function _recoverFromOfflineSoftly(){
         status=await api(`/api/chat/stream/status?stream_id=${encodeURIComponent(streamId)}`);
       }catch(_){/* stream status check failed — leave session refreshed but don't reattach */}
       // Outside the probe's catch so an attachLiveStream throw reaches the
-      // outer fallback (hard reload) instead of being silently swallowed.
+      // retryable connection banner instead of being silently swallowed.
       if(status&&status.active) attachLiveStream(sid,streamId,S.session.pending_attachments||[],{reconnecting:true});
     }
     return true;
   }catch(_){
-    // Soft reattach failed (server mid-restart, session gone, etc.) — fall
-    // back to the original hard reload so the user is never stuck offline.
-    window.location.reload();
+    // Never discard a draft or in-memory File bytes, even if soft recovery fails.
+    if(!_offlineVisible)showOfflineBanner('network');
     return false;
   }
 }
@@ -199,9 +255,16 @@ function _patchOfflineFetch(){
   _offlineFetchPatched=true;
   _offlineRawFetch=window.fetch.bind(window);
   window.fetch=async function(...args){
-    try{return await _offlineRawFetch(...args);}
+    const [input,init]=args;
+    const appRequest=!!_appRequestUrl(input);
+    try{
+      const res=await _offlineRawFetch(input,_appFetchOptions(input,init));
+      if(appRequest&&res.status===401&&(!init||init.webuiAuthRecovery!==false))showAuthRequiredBanner();
+      else if(appRequest&&(res.status===403||res.status>=500))void _showOfflineBannerIfProbeFails('network');
+      return res;
+    }
     catch(e){
-      if(!_isAbortError(e)&&(e instanceof TypeError||!_browserReportsOnline())){
+      if(appRequest&&!_isAbortError(e)&&(e instanceof TypeError||!_browserReportsOnline())){
         void _showOfflineBannerIfProbeFails(_browserReportsOnline()?'network':'browser');
       }
       throw e;
@@ -212,15 +275,13 @@ function initOfflineMonitor(){
   _patchOfflineFetch();
   window.addEventListener('offline',()=>{void _showOfflineBannerIfProbeFails('browser',{requireConsecutiveFailures:false});});
   window.addEventListener('online',()=>{if(_offlineVisible)checkOfflineRecoveryNow();});
+  window.addEventListener('focus',()=>{if(_offlineVisible)checkOfflineRecoveryNow();});
   if(!_browserReportsOnline())void _showOfflineBannerIfProbeFails('browser',{requireConsecutiveFailures:false});
 }
 if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',initOfflineMonitor,{once:true});
 else initOfflineMonitor();
-// Redirect to login when the server responds with 401 (auth session expired).
-// Handles iOS PWA standalone mode and keeps subpath mounts like /hermes/ from
-// escaping to the personal site root /login.
-// #5578: on a login-shaped page, reload 'login' WITHOUT a next (avoid self-nesting).
-function _redirectIfUnauth(res){if(res&&res.status===401){var _p=(window.location.pathname||'').replace(/\/+$/,'');if(/(?:^|\/)login$/.test(_p)){window.location.href='login';}else{window.location.href='login?next='+encodeURIComponent(window.location.pathname+window.location.search);}return true;}return false;}
+// Retain the legacy helper name for callers, but never navigate the live tab.
+function _redirectIfUnauth(res){if(res&&res.status===401){showAuthRequiredBanner();return true;}return false;}
 function _getSessionQueue(sid, create=false){
   if(!sid) return [];
   if(!SESSION_QUEUES[sid]&&create) SESSION_QUEUES[sid]=[];
@@ -14461,19 +14522,26 @@ function _syncAgentHealthMonitorVisibility(){
 document.addEventListener('visibilitychange',_syncAgentHealthMonitorVisibility);
 if(document.readyState==='loading') document.addEventListener('DOMContentLoaded',startAgentHealthMonitor);
 else startAgentHealthMonitor();
-async function refreshSession() {
+async function refreshSession(options) {
+  const recovery=!!(options&&options.recovery);
   // When the banner is in post-update restart mode, the "Reload" button
   // should do a full page reload — a session refresh would just 502 while
   // the server is still restarting.
-  if (window._restartingForUpdate) { location.reload(); return; }
+  if (window._restartingForUpdate) { if(recovery)throw new Error('Update still restarting');location.reload(); return; }
   dismissReconnect();
   if (!S.session) return;
+  const recoverySession=recovery?S.session:null;
+  const recoveryProfile=S.activeProfile;
   try {
     // Bounded tail (msg_limit=30) — a bare reload used to pull and re-redact
     // the ENTIRE transcript on every offline/bfcache recovery (#7310/#7625).
     // truncation signal + _oldestIdx are read below, so the Load-earlier
     // paging gate still works after the windowed refresh.
     const data = await api(`/api/session?session_id=${encodeURIComponent(S.session.session_id)}&messages=1&resolve_model=0&msg_limit=30&expand_renderable=1`);
+    // Recovery is observational: a late read must not replace a newer pane or
+    // erase the current transcript on a malformed/redirected response.
+    if(recovery&&(S.session!==recoverySession||S.activeProfile!==recoveryProfile))return;
+    if(recovery&&(!data||!data.session||data.session.session_id!==recoverySession.session_id))throw new Error('Invalid recovery session');
     S.session = data.session;
     if(typeof _adoptRegenerationRevision==='function') _adoptRegenerationRevision(data.session);
     S.messages = data.session.messages || [];
@@ -14490,7 +14558,7 @@ async function refreshSession() {
     if(typeof updateSendBtn==='function') updateSendBtn();
     syncTopbar(); _renderMessagesWithScrollSnapshot();
     showToast('Conversation refreshed');
-  } catch(e) { setStatus('Refresh failed: ' + e.message); }
+  } catch(e) { if(recovery)throw e;setStatus('Refresh failed: ' + e.message); }
 }
 // ── Update banner ──
 function _formatUpdateTargetStatus(label,info){
