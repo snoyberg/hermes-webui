@@ -95,13 +95,9 @@ class TestClientGuardsWired:
         assert "decodeURIComponent" in LOGIN_JS
         assert "2048" in LOGIN_JS
 
-    def test_workspace_js_skips_next_on_login_page(self):
-        # The 401 handler must NOT append the whole login URL as next when it's
-        # already on the login page (the recursion source).
-        assert "login$/.test(_p)" in WORKSPACE_JS
-        assert "window.location.href='login';" in WORKSPACE_JS
-        # And the non-login path still captures the real destination.
-        assert "'login?next='+encodeURIComponent" in WORKSPACE_JS
+    def test_workspace_js_does_not_navigate_on_401(self):
+        assert "showAuthRequiredBanner()" in WORKSPACE_JS
+        assert "window.location.href=" not in WORKSPACE_JS
 
     def test_all_client_401_helpers_guard_login_page(self):
         # #5578 Codex round-2: workspace.js was fixed but two more client 401
@@ -109,7 +105,7 @@ class TestClientGuardsWired:
         # also nested the login URL. All three must carry the on-login guard.
         UI_JS = (ROOT / "static" / "ui.js").read_text(encoding="utf-8")
         BOOT_JS = (ROOT / "static" / "boot.js").read_text(encoding="utf-8")
-        assert "login$/.test(_p)" in UI_JS, "ui.js _redirectIfUnauth must guard the login page"
+        assert "login$/.test(path)" in UI_JS, "the new-tab login action must guard the login page"
         assert "login$/.test(_p)" in BOOT_JS, "boot.js redirectToLogin must guard the login page"
 
 
