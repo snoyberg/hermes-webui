@@ -9952,6 +9952,7 @@ function startSessionStream(sid) {
       } catch (_) {}
     });
     es.onerror = () => {
+      if(typeof _showOfflineBannerIfProbeFails==='function')void _showOfflineBannerIfProbeFails('network',{requireConsecutiveFailures:false});
       // Browser already auto-reconnects EventSource on most transient
       // failures. We only intervene if the connection has been closed for
       // good (readyState === 2) — schedule a one-shot re-open after 5s.
