@@ -1995,6 +1995,10 @@
   .offline-action{flex-shrink:0;padding:7px 13px;border-radius:9px;border:1px solid var(--accent-bg-strong);background:var(--accent-bg);color:var(--accent-text);font-size:12px;font-weight:700;cursor:pointer;}
   .offline-action:hover{background:var(--accent-bg-strong);}
   .offline-action[disabled]{cursor:wait;opacity:.65;}
+  .offline-actions{display:flex;flex-wrap:wrap;gap:8px;flex-shrink:0;}
+  .offline-actions .offline-action{display:inline-flex;align-items:center;justify-content:center;min-height:44px;text-decoration:none;box-sizing:border-box;}
+  .offline-actions .offline-action[hidden]{display:none;}
+  @media(max-width:600px){.offline-banner{flex-direction:column;align-items:stretch;padding:12px;gap:10px;}.offline-actions{justify-content:flex-end;}}
   .agent-health-banner{position:sticky;bottom:0;z-index:4;display:none;align-items:center;justify-content:space-between;gap:12px;margin:10px auto 0;max-width:var(--msg-max);width:calc(100% - 40px);padding:12px 16px;border:2px solid color-mix(in srgb,var(--error) 65%,var(--surface));border-radius:12px;background:color-mix(in srgb,var(--error) 14%,var(--surface));color:var(--text);box-shadow:0 10px 32px rgba(0,0,0,.16);}
   .agent-health-banner.visible{display:flex;}
   .agent-health-copy{display:flex;flex-direction:column;gap:3px;min-width:0;font-size:13px;line-height:1.35;}
