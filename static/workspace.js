@@ -5,11 +5,12 @@ async function api(path,opts={}){
   const timeoutMs=Object.prototype.hasOwnProperty.call(opts,'timeoutMs')?opts.timeoutMs:30000;
   const timeoutToast=opts.timeoutToast!==false;
   const redirect401=opts.redirect401!==false;
-  const maxAttempts=Object.prototype.hasOwnProperty.call(opts,'retries')?Math.max(0,Number(opts.retries)||0)+1:3;
+  const readOnly=/^(GET|HEAD)$/i.test(opts.method||'GET');
+  const maxAttempts=Object.prototype.hasOwnProperty.call(opts,'retries')?Math.max(0,Number(opts.retries)||0)+1:(readOnly?3:1);
   const retryTimeouts=opts.retryTimeouts===true;
   const retryStatuses=Array.isArray(opts.retryStatuses)?opts.retryStatuses.map(Number).filter(Number.isFinite):[];
   const retryDelayMs=Object.prototype.hasOwnProperty.call(opts,'retryDelayMs')?Math.max(0,Number(opts.retryDelayMs)||0):350;
-  // Retry up to 2 times on network errors (e.g. stale keep-alive after long idle).
+  // Default network retries are read-only: an expired/ambiguous mutation is not replayable.
   // Callers may opt into retrying timeouts / transient server statuses for idempotent GETs.
   let lastErr;
   for(let attempt=0;attempt<maxAttempts;attempt++){
@@ -41,31 +42,15 @@ async function api(path,opts={}){
         fetchOpts.signal=controller.signal;
       }
       const requestPromise=(async()=>{
-        const res=await fetch(url.href,{credentials:'include',headers:{'Content-Type':'application/json'},...fetchOpts});
+        const res=await fetch(url.href,{credentials:'include',headers:{'Content-Type':'application/json'},...fetchOpts,webuiAuthRecovery:redirect401});
         if(!res.ok){
-          // 401 means the auth session expired. Redirect to login so the user can
-          // re-authenticate. This is especially important for iOS PWA (standalone mode)
-          // and for subpath mounts like /hermes/, where /login escapes to the site root.
           if(res.status===401){
-            // #5578: if we're ALREADY on the login page, appending
-            // window.location.pathname+search (which contains ?next=…) into a
-            // fresh next= wraps the login URL into itself and re-encodes it —
-            // exponential URL growth on each expired-auth bounce until the tab
-            // breaks. On the login page, just reload login WITHOUT a next (the
-            // page preserves its own inner next); elsewhere, capture the path.
-            // Check at response time: a draft clear can start before its send
-            // detaches Files. Login navigation must not destroy retained bytes.
-            if(redirect401&&!(typeof _uploadRecoveries!=='undefined'&&_uploadRecoveries.size)){
-              // Already on the login page? Reload login WITHOUT a next.
-              const _p=(window.location.pathname||'').replace(/\/+$/,'');
-              if(/(?:^|\/)login$/.test(_p)){
-                window.location.href='login';
-              }else{
-                window.location.href='login?next='+encodeURIComponent(window.location.pathname+window.location.search);
-              }
-            }
-            // Callers can opt out of navigation and handle the unauthenticated state themselves.
-            return;
+            // Preserve the live page and its File references. Opt-out callers
+            // own presentation, but still receive a typed failure, never success.
+            if(redirect401&&url.origin===location.origin&&typeof showAuthRequiredBanner==='function')showAuthRequiredBanner();
+            const err=new Error('Authentication required (401)');
+            err.status=401;
+            throw err;
           }
           const text=await res.text();
           // Parse JSON error body and surface the human-readable message,
@@ -140,6 +125,8 @@ async function api(path,opts={}){
 }
 
 function recordClientSSEError(source, details={}){
+  // EventSource cannot carry the AJAX header; a read-only probe classifies auth.
+  if(typeof _showOfflineBannerIfProbeFails==='function')void _showOfflineBannerIfProbeFails('network',{requireConsecutiveFailures:false});
   try{
     const payload={
       event:'sse_error',
