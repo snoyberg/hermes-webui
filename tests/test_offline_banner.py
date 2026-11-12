@@ -33,7 +33,7 @@ def test_offline_banner_markup_styles_and_copy_exist():
         assert key in I18N_JS
 
 
-def test_offline_monitor_patches_fetch_and_auto_reloads_after_health_probe():
+def test_offline_monitor_patches_fetch_and_softly_recovers_after_health_probe():
     assert "const OFFLINE_RECHECK_MS=2500" in UI_JS
     assert "const OFFLINE_HEALTH_TIMEOUT_MS=10000" in UI_JS
     assert "const OFFLINE_FETCH_FAILURES_BEFORE_BANNER=2" in UI_JS
@@ -42,19 +42,21 @@ def test_offline_monitor_patches_fetch_and_auto_reloads_after_health_probe():
     assert "window.addEventListener('online',()=>{if(_offlineVisible)checkOfflineRecoveryNow();})" in UI_JS
     assert "setInterval(()=>{checkOfflineRecoveryNow();},OFFLINE_RECHECK_MS)" in UI_JS
     assert "new URL('health',document.baseURI||location.href)" in UI_JS
-    assert "window.location.reload()" in UI_JS
+    recovery = UI_JS.split('async function _recoverFromOfflineSoftly(){', 1)[1].split('function _isAbortError', 1)[0]
+    assert "location.reload()" not in recovery
+    assert "showOfflineBanner('network')" in recovery
 
 
-def test_offline_recovery_probe_is_serialized_and_stops_timer_before_reload():
+def test_offline_recovery_probe_is_serialized_and_stops_timer_before_soft_recovery():
     assert "let _offlineProbePromise=null" in UI_JS
     assert "let _offlineHealthProbePromise=null" in UI_JS
     assert "if(!_offlineVisible)return false;" in UI_JS
     assert "if(!_offlineVisible&&!_offlineFetchPatched)return false;" not in UI_JS
     assert "finally{_offlineProbePromise=null;}" in UI_JS
     assert "finally{_offlineHealthProbePromise=null;}" in UI_JS
-    reload_idx = UI_JS.find("window.location.reload()")
-    assert reload_idx != -1
-    assert UI_JS.rfind("_stopOfflineProbeTimer();", 0, reload_idx) != -1
+    recovery_idx = UI_JS.find("return await _recoverFromOfflineSoftly();")
+    assert recovery_idx != -1
+    assert UI_JS.rfind("_stopOfflineProbeTimer();", 0, recovery_idx) != -1
 
 
 def test_fetch_typeerror_is_gated_by_health_probe_not_blind_banner():
