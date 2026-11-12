@@ -17,8 +17,8 @@ Fix: recover softly via `_recoverFromOfflineSoftly()` — hide the banner,
 restart the gateway SSE, and re-fetch the active session through the existing
 `refreshSession()` reattach path. The server keeps the agent running and
 buffers stream events while no subscriber is attached (#2307), so a hard reload
-is never required. A full `window.location.reload()` remains only as the catch
-fallback if the soft reattach throws.
+is never required. A failed soft reattach retains a retryable connection banner,
+not a hard reload which would discard unsent File references.
 
 State layer: this only changes the *client* recovery transition (banner →
 reattach). It does not touch server stream buffering, session persistence, or
@@ -85,13 +85,11 @@ class TestOfflineSoftRecovery:
             "refreshSession() so messages that arrived while away appear"
         )
 
-    def test_soft_recover_falls_back_to_hard_reload(self):
-        """A failed soft reattach must fall back to a full reload (never stuck)."""
+    def test_soft_recover_failure_preserves_page_and_retries(self):
+        """A failed soft reattach must retain the page and offer another check."""
         body = _fn_body(_ui_js(), "async function _recoverFromOfflineSoftly(")
-        assert "window.location.reload()" in body, (
-            "_recoverFromOfflineSoftly must keep window.location.reload() as the "
-            "catch fallback so a failed soft reattach never leaves the user stuck"
-        )
+        assert "location.reload()" not in body
+        assert "showOfflineBanner('network')" in body
 
     def test_refresh_session_guarded_with_typeof(self):
         """Reattach calls must be typeof-guarded for safe degradation."""
