@@ -90,6 +90,9 @@ async function scenario(name,extra={}){
       });
       c.window._clearPendingSelections=noop;
       c.window.location={pathname:'/',search:'',href:'https://fixture.invalid/'};
+      c.location.origin='https://fixture.invalid';
+      c.authRequests=0;
+      c.showAuthRequiredBanner=()=>{c.authRequests++;};
       vm.runInContext(lifecycle,c);
       const uploadFetch=c.fetch;
       c.fetch=async(url,opts)=>{
@@ -129,7 +132,7 @@ async function scenario(name,extra={}){
       assert.equal(vm.runInContext('_newSessionInFlight',c),null,'creation lock settles before upload');
       assert.equal(record.items[0].file,file);assert.equal(record.state,'failed');assert.equal(state.starts.length,0);
       assert.equal(drafts[owner].text,'','submit clears the new-chat draft');
-      if(c.pendingAuth){c.releaseAuth();await c.pendingAuth;assert.equal(c.window.location.href,'https://fixture.invalid/');}
+      if(c.pendingAuth){c.releaseAuth();await assert.rejects(c.pendingAuth,err=>err.status===401);assert.equal(c.window.location.href,'https://fixture.invalid/');}
       // A completed New Chat leaves the first, still-empty conversation off the sidebar.
       await c.newSession(false);
       assert.equal(S.session.session_id,'new-2');
@@ -147,8 +150,10 @@ async function scenario(name,extra={}){
         if(extra.profileMismatch)assert.equal(reads.length,0,'no implicit profile switch');
         if(extra.metadataFailure===401){
           c._discardUploadRecovery(record.id);
-          await c.api('/api/session?session_id='+owner);
-          assert(c.window.location.href.startsWith('login?next='),'ordinary auth redirect resumes after discard');
+          const before=c.authRequests;
+          await assert.rejects(c.api('/api/session?session_id='+owner),err=>err.status===401);
+          assert.equal(c.authRequests,before+1,'ordinary auth recovery remains visible after discard');
+          assert.equal(c.window.location.href,'https://fixture.invalid/','auth recovery never unloads the page');
         }
         return;
       }
