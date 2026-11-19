@@ -90,13 +90,20 @@ consent from a session-open event or a subscription left by another profile.
 
 ## Privacy, ownership, and delivery limits
 
-All notification types use a fixed `Hermes` title. By default bodies remain
-generic. Administrators may explicitly set `completion_preview: true` in the
-private server configuration to include a bounded final-assistant-response excerpt
+By default all notification types use a fixed `Hermes` title and generic body.
+Administrators may explicitly set `completion_preview: true` in the
+private server configuration to include a bounded conversation title above the
+final-assistant-response excerpt
 for already opted-in devices/profiles. OS notification settings control preview
 visibility; encryption does not hide a displayed notification from someone looking
 at the screen. Approval, clarification and test alerts always remain generic.
-No user prompt, tool result, session title or internal child output is selected.
+No user prompt, tool result or internal child output is selected for the excerpt.
+The completion heading uses the current session title, with recognized credentials
+redacted, control/format characters removed, whitespace normalized and a 240-byte
+UTF-8 limit including the truncation ellipsis. Missing or invalid titles fall back
+to `Hermes` without replacing the response preview. Titles are covered by the
+same opt-in content policy as completion previews; attention and test headings
+remain `Hermes`.
 The excerpt comes only from the current run's committed final assistant row after
 its exact user-turn checkpoint, with credential redaction forced on. An unavailable
 or unverifiable final answer falls back to generic copy, never an older answer.
@@ -104,7 +111,8 @@ Credentials must not be intentionally included in assistant replies; redaction i
 not a guarantee that arbitrary secret-looking text can always be recognized.
 
 The payload contains version, enumerated kind, profile/session routing IDs, a
-hashed event identity and optionally a completion-only `preview`. Serialized JSON
+hashed event identity and optionally completion-only `preview` and
+`conversation_title` fields. Serialized JSON
 is bounded to 3000 UTF-8 bytes, including escaping and a truncation ellipsis, leaving
 room for standard aes128gcm Web Push encryption overhead. The existing protected
 delivery store retains that same bounded payload with its normal expiry/pruning;
