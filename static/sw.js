@@ -253,7 +253,10 @@ self.addEventListener('push',event=>{
       :'Open Hermes to review a pending request.';
     // WebKit requires a user-visible notification for every received push.
     // Retries replace the same notification without requesting sound.
-    await self.registration.showNotification('Hermes',{
+    const title=data.kind==='complete'&&typeof data.conversation_title==='string'
+      &&data.conversation_title.trim()&&new TextEncoder().encode(data.conversation_title).length<=240
+      &&!/[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/u.test(data.conversation_title)?data.conversation_title:'Hermes';
+    await self.registration.showNotification(title,{
       body,tag:'hermes-push-'+data.event,renotify:false,silent:claimed.replay,
       icon:new URL('static/favicon-192.png',self.registration.scope).href,
       badge:new URL('static/favicon-32.png',self.registration.scope).href,
