@@ -224,7 +224,7 @@ def test_terminal_emitter_previews_only_current_settled_final(tmp_path, monkeypa
                                completion_preview=True)
     monkeypatch.setattr(push, '_service', service)
     service.store.enroll('phone', 'work', {'endpoint': 'synthetic'})
-    session = SimpleNamespace(session_id='desktop', profile='work', read_only=False, messages=[
+    session = SimpleNamespace(session_id='desktop', profile='work', read_only=False, title='Release planning 🐕', messages=[
         {'role': 'user', 'content': 'OLD PROMPT', '_active_turn_token': 'old'},
         {'role': 'assistant', 'content': 'OLD ANSWER'},
         {'role': 'user', 'content': 'PRIVATE PROMPT', '_active_turn_token': 'run1:100'},
@@ -245,10 +245,19 @@ def test_terminal_emitter_previews_only_current_settled_final(tmp_path, monkeypa
     namespace[function_name]('done', {'session': {'messages': session.messages}})
     row, = service.store.pending()
     assert json.loads(row['payload'])['preview'] == 'Final answer 🐕'
+    assert json.loads(row['payload'])['conversation_title'] == 'Release planning 🐕'
     assert all(text not in row['payload'] for text in ('PRIVATE', 'OLD', 'INTERMEDIATE', 'MIDSTREAM'))
     sent = []
     service.store.deliver(lambda sub, payload, ttl: sent.append(json.loads(payload)) or 201)
     assert sent[0]['preview'] == 'Final answer 🐕'
+    # Pass the real producer/store payload directly to the production worker handler.
+    import os
+    import subprocess
+    if os.environ.get('PUSH_FAKE_INDEXEDDB'):
+        result = subprocess.run(['node', 'tests/private_push_worker.cjs'],
+                                cwd=Path(__file__).parents[1], capture_output=True, text=True, timeout=20,
+                                env=os.environ | {'PUSH_COMPLETION_PAYLOAD': json.dumps(sent[0])})
+        assert result.returncode == 0, result.stdout + result.stderr
 
 
 @pytest.mark.parametrize('text', ['😀' * 10000, '\"\\\n\x00' * 10000, 'שלום é' * 10000, '\ud800' * 5000])
@@ -256,10 +265,11 @@ def test_excerpt_json_utf8_and_encrypted_payload_ceiling(tmp_path, monkeypatch, 
     push = module()
     store = push.PushStore(tmp_path / 'push')
     store.enroll('phone', 'work', {'endpoint': 'synthetic'})
-    store.enqueue('work', 'session', 'run', 'complete', preview=text)
+    store.enqueue('work', 'session', 'run', 'complete', preview=text, conversation_title=text)
     row, = store.pending()
     assert len(row['payload'].encode('utf-8')) <= push.MAX_PAYLOAD_BYTES
     assert json.loads(row['payload'])['preview'].endswith('…')
+    assert len(json.loads(row['payload'])['conversation_title'].encode('utf-8')) <= 240
     # Exercise actual aes128gcm framing, not only a plaintext size estimate.
     from cryptography.hazmat.primitives.asymmetric import ec
     from cryptography.hazmat.primitives import serialization
@@ -317,6 +327,39 @@ def test_preview_consent_stale_owner_and_attention_fences(tmp_path, monkeypatch)
     for kind in ('approval', 'clarify', 'test'):
         with pytest.raises(ValueError):
             service.store.enqueue('work', 'desktop', 'run', kind, preview='PRIVATE')
+
+
+@pytest.mark.parametrize('title', [None, '', ' \n\x00\u202e ', 42, 'Planning 🐕', 'x\ud800y'])
+@pytest.mark.parametrize('enabled', [False, True])
+def test_completion_title_policy_fallback_and_redaction(tmp_path, monkeypatch, title, enabled):
+    from types import SimpleNamespace
+    push = module()
+    service = push.PushService(push.PushStore(tmp_path / 'push'), None, 'public', 'mailto:a@example.com',
+                               completion_preview=enabled)
+    monkeypatch.setattr(push, '_service', service)
+    service.store.enroll('phone', 'work', {'endpoint': 'synthetic'})
+    messages = [{'role': 'user', '_active_turn_token': 'current', 'content': 'PROMPT'},
+                {'role': 'assistant', 'content': 'Final answer'}]
+    session = SimpleNamespace(session_id='desktop', profile='work', read_only=False)
+    push.bind_run(session, 'run')
+    push.finish_run('desktop', 'run', completed=True, messages=messages, turn_token='current',
+                    conversation_title=title)
+    payload = json.loads(service.store.pending()[0]['payload'])
+    if not enabled or title in (None, '', ' \n\x00\u202e ', 42):
+        assert 'conversation_title' not in payload
+    else:
+        assert payload['conversation_title'] == title.encode('utf-8', errors='replace').decode()
+    assert payload.get('preview') == ('Final answer' if enabled else None)
+    secret = 'sk-' + 'a' * 48
+    service.store.enqueue('work', 'desktop', 'secret-title', 'complete',
+                          conversation_title='Planning ' + secret[:10] + '\u202e' + secret[10:] + '\n\x00')
+    row = next(row for row in service.store.pending() if row['event'] == push.event_key('secret-title'))
+    assert secret not in row['payload']
+    assert json.loads(row['payload'])['conversation_title'].startswith('Planning ')
+    assert all(c not in json.loads(row['payload'])['conversation_title'] for c in ('\n', '\x00', '\u202e'))
+    for kind in ('approval', 'clarify', 'test'):
+        with pytest.raises(ValueError):
+            service.store.enqueue('work', 'desktop', 'run', kind, conversation_title='PRIVATE')
 
 
 def test_completion_redacts_credentials_and_ignores_reasoning_blocks():
