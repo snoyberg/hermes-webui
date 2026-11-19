@@ -14818,7 +14818,8 @@ def _run_agent_streaming(
             from api.web_push import finish_run
             finish_run(session_id, stream_id, completed=event == 'done',
                        messages=getattr(s, 'messages', None) if event == 'done' and not data.get('ephemeral') else None,
-                       turn_token=_active_turn_identity.get('token') if event == 'done' else None)
+                       turn_token=_active_turn_identity.get('token') if event == 'done' else None,
+                       conversation_title=getattr(s, 'title', None) if event == 'done' else None)
         event_id = None
         if run_journal is not None:
             try:
