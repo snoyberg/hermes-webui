@@ -18,6 +18,7 @@ def component_script(source=None):
     # Navigation helpers arrived upstream after the original carried renderer.
     # Extract the complete real path when present, including its profile guard.
     for name in [
+        "_showsForkOrBranchIndicator", "_isResetSuccessor",
         "_installSessionOpenControl",
         "_retireProjectPickerForExplicitRepaint",
         "_wireSessionNewTabListeners", "_consumeSessionNewTabClick",
