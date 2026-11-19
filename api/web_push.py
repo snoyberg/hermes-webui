@@ -16,6 +16,7 @@ MAX_ATTEMPTS = 4
 MAX_RECIPIENTS = 128
 MAX_DELIVERIES = 10000
 MAX_PAYLOAD_BYTES = 3000  # Leaves room for aes128gcm overhead within 4096 bytes.
+MAX_TITLE_BYTES = 240
 
 
 def completion_text(messages, turn_token):
@@ -40,10 +41,27 @@ def completion_text(messages, turn_token):
     return _redact_text(content, _enabled=True).strip()
 
 
-def encode_payload(payload, preview=None):
+def notification_title(title):
+    """Redact before truncating; never persist a partial recognized credential."""
+    if not isinstance(title, str) or not title.strip():
+        return None
+    import unicodedata
+    from api.helpers import _redact_text
+    title = ''.join(' ' if c.isspace() else c for c in title
+                    if c.isspace() or unicodedata.category(c) not in ('Cc', 'Cf'))
+    title = _redact_text(' '.join(title.split()), _enabled=True).encode('utf-8', errors='replace')
+    if len(title) > MAX_TITLE_BYTES:
+        return title[:MAX_TITLE_BYTES - 3].decode('utf-8', errors='ignore') + '…'
+    return title.decode('utf-8') or None
+
+
+def encode_payload(payload, preview=None, conversation_title=None):
     """Bound the actual JSON/UTF-8 cost, including escaped control characters."""
     def encode():
         return json.dumps(payload, ensure_ascii=False, separators=(',', ':'))
+    title = notification_title(conversation_title)
+    if title:
+        payload['conversation_title'] = title
     if preview:
         # Lone surrogates cannot be encoded as UTF-8; replace before measuring.
         preview = preview.encode('utf-8', errors='replace').decode('utf-8')
@@ -193,17 +211,20 @@ class PushStore:
             db.execute('DELETE FROM recipients WHERE device=? AND profile=?', (device, profile))
             db.execute('DELETE FROM deliveries WHERE device=? AND profile=?', (device, profile))
 
-    def enqueue(self, profile, session, event, kind, *, device=None, now=None, expires_at=None, preview=None):
+    def enqueue(self, profile, session, event, kind, *, device=None, now=None, expires_at=None,
+                preview=None, conversation_title=None):
         if kind not in KINDS:
             raise ValueError('Unknown push kind')
         if preview is not None and (kind != 'complete' or not isinstance(preview, str)):
             raise ValueError('Only completions may carry a response excerpt')
+        if conversation_title is not None and kind != 'complete':
+            raise ValueError('Only completions may carry a conversation title')
         now = time.time() if now is None else now
         expires = min(now + TTL, expires_at) if expires_at else now + TTL
         if expires <= now:
             return 0
         payload = encode_payload(dict(v=1, kind=kind, profile=profile, session=session,
-                                      event=event_key(profile, session, event, kind)), preview)
+                                      event=event_key(profile, session, event, kind)), preview, conversation_title)
         count = 0
         with self.connect() as db:
             db.execute('BEGIN IMMEDIATE')
@@ -402,7 +423,7 @@ def attention(session_id, kind, head):
         pass  # Do not mark a failed enqueue seen; the owner can retry its projection.
 
 
-def finish_run(session_id, run_id, *, completed=False, messages=None, turn_token=None):
+def finish_run(session_id, run_id, *, completed=False, messages=None, turn_token=None, conversation_title=None):
     if _service is None:
         return
     try:
@@ -415,7 +436,8 @@ def finish_run(session_id, run_id, *, completed=False, messages=None, turn_token
                 _service.store.cancel_attention(profile, session_id, kind)
             if completed:
                 preview = completion_text(messages, turn_token) if _service.completion_preview else None
-                _service.store.enqueue(profile, session_id, run_id, 'complete', preview=preview)
+                title = conversation_title if _service.completion_preview else None
+                _service.store.enqueue(profile, session_id, run_id, 'complete', preview=preview, conversation_title=title)
             _owners.pop(session_id, None)
     except Exception:
         pass
