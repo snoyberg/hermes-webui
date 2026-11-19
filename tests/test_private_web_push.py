@@ -30,6 +30,19 @@ def module():
         raise
 
 
+def _compile_terminal_emitter(node, namespace, filename):
+    """Keep the production emitter's lexical stream-end state in the fixture."""
+    import ast
+    bindings = {name for part in ast.walk(node) if isinstance(part, ast.Nonlocal)
+                for name in part.names}
+    assert bindings <= {'_stream_end_published'}, bindings
+    wrapper = ast.parse('def _emitter_scope():\n    _stream_end_published = False\n').body[0]
+    wrapper.body.extend([node, ast.Return(value=ast.Name(id=node.name, ctx=ast.Load()))])
+    tree = ast.fix_missing_locations(ast.Module(body=[wrapper], type_ignores=[]))
+    exec(compile(tree, filename, 'exec'), namespace)
+    namespace[node.name] = namespace['_emitter_scope']()
+
+
 def test_enrolled_profile_receives_unopened_desktop_session_once(tmp_path):
     push = module()
     store = push.PushStore(tmp_path / 'push')
@@ -192,7 +205,7 @@ def test_real_terminal_emitter_queues_completion_without_page(tmp_path, monkeypa
                      success_writeback_committed=True, run_journal=None, q=queue.Queue(),
                      session_id='desktop', stream_id='run1', _settle_pending_steer=lambda: None,
                      s=SimpleNamespace(messages=[]), _active_turn_identity={}, active_turn_identity={})
-    exec(compile(ast.Module(body=[node], type_ignores=[]), filename, 'exec'), namespace)
+    _compile_terminal_emitter(node, namespace, filename)
     namespace[function_name]('done', {'session': {'messages': ['PRIVATE OUTPUT']}})
     assert len(service.store.pending()) == 1
     assert service.store.pending()[0]['kind'] == 'complete'
@@ -226,7 +239,7 @@ def test_terminal_emitter_previews_only_current_settled_final(tmp_path, monkeypa
                      success_writeback_committed=True, run_journal=None, q=queue.Queue(), s=session,
                      session_id='desktop', stream_id='run1', _settle_pending_steer=lambda: None,
                      _active_turn_identity={'token': 'run1:100'}, active_turn_identity={'token': 'run1:100'})
-    exec(compile(ast.Module(body=[node], type_ignores=[]), filename, 'exec'), namespace)
+    _compile_terminal_emitter(node, namespace, filename)
     namespace[function_name]('token', {'text': 'MIDSTREAM'})
     assert not service.store.pending()
     namespace[function_name]('done', {'session': {'messages': session.messages}})
