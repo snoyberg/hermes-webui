@@ -43,6 +43,35 @@ async function dispatch(type, extra){
   const complete={v:1,kind:'complete',profile:'work',session:'desktop-started',event:'d'.repeat(64),preview:'Final answer 🐕'};
   await dispatch('push',{data:{json:()=>complete}});
   assert.equal(shown.at(-1)[1].body,complete.preview);
+  assert.equal(shown.at(-1)[0],'Hermes');
+  const titled={...complete,event:'f'.repeat(64),conversation_title:'Release planning 🐕'};
+  await dispatch('push',{data:{json:()=>titled}});
+  assert.equal(shown.at(-1)[0],titled.conversation_title,'conversation title must be the visible notification heading');
+  assert.equal(shown.at(-1)[1].body,complete.preview,'title must not replace the response preview');
+  assert.deepEqual({...shown.at(-1)[1].data},{privatePush:true,profile:'work',session:'desktop-started'});
+  await dispatch('notificationclick',{notification:{close(){},data:shown.at(-1)[1].data}});
+  assert.equal(opened.at(-1),'https://hermes.example/app/session/desktop-started?profile=work');
+  await dispatch('push',{data:{json:()=>titled}});
+  assert.equal(shown.at(-1)[1].silent,true);
+  assert.equal(shown.at(-1)[1].tag,'hermes-push-'+titled.event);
+  assert.equal(shown.at(-1)[1].renotify,false);
+  for(const title of [42,'😀'.repeat(1000),'','\n\x00','x\u202ey']){
+    await dispatch('push',{data:{json:()=>({...titled,conversation_title:title})}});
+    assert.equal(shown.at(-1)[0],'Hermes','invalid title must use generic heading without dropping preview');
+    assert.equal(shown.at(-1)[1].body,complete.preview);
+  }
+  await dispatch('push',{data:{json:()=>({...payload,conversation_title:'PRIVATE TITLE'})}});
+  assert.equal(shown.at(-1)[0],'Hermes','attention titles must remain generic');
+  await dispatch('push',{data:{json:()=>({v:1,kind:'test',profile:'work',session:'',event:'1'.repeat(64),conversation_title:'PRIVATE TITLE'})}});
+  assert.equal(shown.at(-1)[0],'Hermes','test titles must remain generic');
+  if(process.env.PUSH_COMPLETION_PAYLOAD){
+    const produced=JSON.parse(process.env.PUSH_COMPLETION_PAYLOAD);
+    await dispatch('push',{data:{json:()=>produced}});
+    assert.equal(shown.at(-1)[0],'Release planning 🐕','backend-produced heading must render');
+    assert.equal(shown.at(-1)[1].body,'Final answer 🐕','backend-produced preview must be preserved');
+    await dispatch('notificationclick',{notification:{close(){},data:shown.at(-1)[1].data}});
+    assert.equal(opened.at(-1),'https://hermes.example/app/session/desktop?profile=work');
+  }
   await dispatch('push',{data:{json:()=>complete}});
   assert.equal(shown.at(-1)[1].silent,true);
   assert.equal(shown.at(-1)[1].tag,'hermes-push-'+complete.event);
