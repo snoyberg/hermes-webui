@@ -8510,7 +8510,8 @@ def _login_client_ip(handler) -> str:
     X-Forwarded-For through and the client could pick its bucket. Every field
     of both headers is checked, as the resolver reads them all: fall back to the
     raw peer when they differ, a field is empty, X-Real-IP is repeated with
-    different values, or a value is not an IP address.
+    different values, a value is not an IP address, or the forwarded client
+    carries an IPv6 zone ID ("fe80::1%eth0").
 
     A request with no X-Forwarded-For keys on the raw peer even when X-Real-IP
     is a valid address: X-Real-IP alone may be the client's own value relayed
@@ -8544,7 +8545,11 @@ def _login_client_ip(handler) -> str:
                     _forwarded_client_ip_from_trusted_proxy(handler, consult_real_ip=False)
                 )
                 real_ips = {ipaddress.ip_address(v.strip()) for v in _fields("X-Real-IP")}
-                if real_ips <= {client}:
+                # An IPv6 zone ID ("fe80::1%eth0") is free-form header text
+                # that ipaddress keeps verbatim (control characters included)
+                # and that means nothing off-host. Treat a scoped forwarded
+                # client as unusable, as the request log does. IPv4 has none.
+                if getattr(client, "scope_id", None) is None and real_ips <= {client}:
                     return str(client)
         except ValueError:
             pass
@@ -15039,7 +15044,7 @@ _LOGIN_LOCALE = {
     "de": {
         "lang": "de-DE",
         "title": "Anmelden",
-        "subtitle": "Geben Sie Ihr Passwort ein, um fortzufahren",
+        "subtitle": "Gib dein Passwort ein, um fortzufahren",
         "placeholder": "Passwort",
         "btn": "Anmelden",
         "invalid_pw": "Ung\u00fcltiges Passwort",
@@ -20530,17 +20535,22 @@ def handle_post(handler, parsed) -> bool:
         requested_profile, requested_profile_invalid = _new_session_requested_profile(body)
         if requested_profile_invalid:
             return bad(handler, "invalid profile", 400)
+        # Stage timers: one [SLOW] line (same 2s threshold / _safe_webui_print
+        # route as GET /api/session) so tail latency can be attributed.
+        _sn_t0 = time.monotonic()
         workspace_prev_session_id = body.get("prev_session_id")
         if workspace_prev_session_id and not _session_id_visible_to_request_profile(
             handler, workspace_prev_session_id, emit_error=False
         ):
             workspace_prev_session_id = None
+        _sn_t1 = time.monotonic()
         try:
             workspace = _resolve_new_session_workspace(
                 body, workspace_prev_session_id, profile=requested_profile or None
             )
         except (TypeError, ValueError) as e:
             return bad(handler, str(e))
+        _sn_t2 = time.monotonic()
         worktree_info = None
         worktree_skipped = None
         # Three-value worktree model (#6022): an explicit body value always
@@ -20593,6 +20603,7 @@ def handle_post(handler, parsed) -> bool:
             except Exception as e:
                 logger.exception("failed to create worktree-backed session")
                 return bad(handler, f"Failed to create worktree: {e}", status=500)
+        _sn_t3 = time.monotonic()
         model, model_provider = _session_model_state_from_request(
             body.get("model"),
             body.get("model_provider"),
@@ -20657,6 +20668,7 @@ def handle_post(handler, parsed) -> bool:
                 # thread the drain snapshot already missed).
                 if _register_background_commit_thread(t):
                     t.start()
+        _sn_t4 = time.monotonic()
         s = new_session(
             workspace=workspace,
             model=model,
@@ -20666,12 +20678,14 @@ def handle_post(handler, parsed) -> bool:
             worktree_info=worktree_info,
             enabled_toolsets=enabled_toolsets,
         )
+        _sn_t5 = time.monotonic()
         if worktree_info:
             publish_session_list_changed(
                 "session_new",
                 profile=getattr(s, "profile", None),
                 session_id=getattr(s, "session_id", None),
             )
+        _sn_t6 = time.monotonic()
         payload = {
             "session": public_session_projection(s.compact() | {"messages": s.messages})
         }
@@ -20679,7 +20693,24 @@ def handle_post(handler, parsed) -> bool:
             # Config-default worktree was skipped (non-git workspace); tell the
             # client the session is plain so the UI doesn't assume isolation.
             payload["worktree_skipped"] = worktree_skipped
-        return j(handler, payload)
+        _sn_t7 = time.monotonic()
+        resp = j(handler, payload)
+        _sn_t8 = time.monotonic()
+        _sn_total_ms = (_sn_t8 - _sn_t0) * 1000
+        _slow_print = getattr(handler, '_safe_webui_print', None)
+        if callable(_slow_print) and _sn_total_ms >= 2000:
+            _slow_print(
+                "[SLOW] session_new total=%.1fms prev_check=%.1fms workspace=%.1fms "
+                "worktree=%.1fms prep=%.1fms new_session=%.1fms publish=%.1fms "
+                "projection=%.1fms json_write=%.1fms" % (
+                    _sn_total_ms,
+                    (_sn_t1 - _sn_t0) * 1000, (_sn_t2 - _sn_t1) * 1000,
+                    (_sn_t3 - _sn_t2) * 1000, (_sn_t4 - _sn_t3) * 1000,
+                    (_sn_t5 - _sn_t4) * 1000, (_sn_t6 - _sn_t5) * 1000,
+                    (_sn_t7 - _sn_t6) * 1000, (_sn_t8 - _sn_t7) * 1000,
+                )
+            )
+        return resp
 
     if parsed.path == "/api/session/compression-recovery/start":
         return _handle_session_compression_recovery_start(handler, body)
@@ -23895,6 +23926,13 @@ def handle_post(handler, parsed) -> bool:
         return _handle_session_import(handler, body)
 
     # ── Self-update (POST) ──
+    if parsed.path in ("/api/updates/apply", "/api/updates/force", "/api/updates/clear_lock"):
+        from api.updates import confirmed_gateway_impact
+
+        try:  # #8746: a confirmation field of the wrong type is a bad request
+            confirmed_gateway_impact(body)
+        except ValueError as exc:
+            return bad(handler, str(exc))
     if parsed.path in ('/api/updates/agent/status', '/api/updates/agent/reload'):
         from api.native_agent_update import status
         if set(body) - {'action_id', 'owner'}:
@@ -23923,12 +23961,15 @@ def handle_post(handler, parsed) -> bool:
         _apply_channel = body.get("channel") if isinstance(body, dict) else None
         if _apply_channel not in ("stable", "experimental", "kaladin"):
             _apply_channel = None
-        from api.updates import apply_update
+        from api.updates import apply_update, confirmed_gateway_impact
 
         # #7293: an update refuses while WebUI-owned runs are active unless the
         # client re-sends it with an explicit, user-confirmed force.
         _force_active_runs = isinstance(body, dict) and body.get("force_active_runs") is True
-        return j(handler, apply_update(target, _apply_channel, force_active_runs=_force_active_runs))
+        return j(handler, apply_update(
+            target, _apply_channel, force_active_runs=_force_active_runs,
+            confirmed_gateway=confirmed_gateway_impact(body),  # #8746
+        ))
 
     if parsed.path == "/api/updates/force":
         target = body.get("target", "")
@@ -23937,10 +23978,13 @@ def handle_post(handler, parsed) -> bool:
         _force_channel = body.get("channel") if isinstance(body, dict) else None
         if _force_channel not in ("stable", "experimental", "kaladin"):
             _force_channel = None
-        from api.updates import apply_force_update
+        from api.updates import apply_force_update, confirmed_gateway_impact
 
         _force_active_runs = isinstance(body, dict) and body.get("force_active_runs") is True  # #7293
-        return j(handler, apply_force_update(target, _force_channel, force_active_runs=_force_active_runs))
+        return j(handler, apply_force_update(
+            target, _force_channel, force_active_runs=_force_active_runs,
+            confirmed_gateway=confirmed_gateway_impact(body),  # #8746
+        ))
 
     if parsed.path == "/api/updates/clear_lock":
         # Manual-instruction recovery for the .git/index.lock case. The
@@ -23953,10 +23997,13 @@ def handle_post(handler, parsed) -> bool:
         target = body.get("target", "")
         if target not in ("webui", "agent"):
             return bad(handler, 'target must be "webui" or "agent"')
-        from api.updates import apply_clear_lock
+        from api.updates import apply_clear_lock, confirmed_gateway_impact
 
         _force_active_runs = isinstance(body, dict) and body.get("force_active_runs") is True  # #7293
-        return j(handler, apply_clear_lock(target, force_active_runs=_force_active_runs))
+        return j(handler, apply_clear_lock(
+            target, force_active_runs=_force_active_runs,
+            confirmed_gateway=confirmed_gateway_impact(body),  # #8746
+        ))
 
     if parsed.path == "/api/updates/summary":
         from api.updates import summarize_update_payload
