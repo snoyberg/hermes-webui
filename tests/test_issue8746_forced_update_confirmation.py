@@ -555,6 +555,14 @@ _SENDERS = {"apply": "/api/updates/apply", "force": "/api/updates/force", "clear
 
 
 def _sender_scenario(entry, second_response):
+    # Ordinary Agent apply is native-owned; exercise the generic WebUI sender
+    # here, retaining Agent Gateway/count assertions for force/clear-lock helpers.
+    if entry == "apply":
+        return {
+            "entry": entry, "target": "webui", "updateData": harness._WEBUI_BEHIND,
+            "responses": [harness._refusal(1), second_response],
+            "clickOffer": True, "confirmAnswers": [True],
+        }
     return {
         "entry": entry, "target": "agent", "updateData": harness._AGENT_BEHIND,
         "responses": [harness._refusal(1, **_AGENT_REFUSAL), second_response],
@@ -570,6 +578,9 @@ def test_every_sender_forwards_the_confirmation_and_count(entry, tmp_path):
     out = _run_client(_sender_scenario(entry, {"ok": True, "target": "agent"}), tmp_path)
     forced = out["apiCalls"][1]
     assert forced["url"] == _SENDERS[entry]
+    if entry == "apply":
+        assert forced["body"] == {"target": "webui", "channel": "stable", "force_active_runs": True}
+        return
     assert {k: forced["body"].get(k) for k in (*FIELDS, "interrupted_runs", "force_active_runs")} == {
         "gateway_restart_managed": False, "gateway_profile": "alpha", "gateway_endpoint": ENDPOINT,
         "interrupted_runs": 0, "force_active_runs": True,
