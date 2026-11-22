@@ -31,6 +31,15 @@ pytestmark = pytest.mark.skipif(NODE is None, reason="node required for the ui.j
 
 _FUNCTIONS = (
     ("function", "_i18nUpdateText"),
+    ("function", "_nativeAgentProfile"),
+    ("function", "_nativeAgentStored"),
+    ("function", "_nativeAgentSave"),
+    ("function", "_nativeAgentCurrent"),
+    ("function", "_renderNativeAgentOutcome"),
+    ("async function", "_nativeAgentResolveOwner"),
+    ("async function", "_submitNativeAgentUpdate"),
+    ("async function", "_resumeNativeAgentUpdate"),
+    ("async function", "_pollNativeAgentUpdate"),
     ("async function", "applyUpdates"),
     ("function", "_showUpdateError"),
     ("function", "_activeRunsUpdateText"),
@@ -64,6 +73,7 @@ function makeEl(tag, id) {
   Object.defineProperty(el, 'isConnected', {
     get() { let n = el; while (n) { if (n === root) return true; n = n.parentNode; } return false; },
   });
+  el.addEventListener = (event, cb) => { el['on' + event] = cb; };
   el.appendChild = (c) => {
     if (c.parentNode) c.parentNode.removeChild(c);
     c.parentNode = el; el.children.push(c); return c;
@@ -114,7 +124,7 @@ const responses = scenario.responses.slice();
 const ctx = {
   console,
   navigator: { languages: ['en-US'], language: 'en-US' },
-  localStorage: { getItem() { return null; }, setItem() {} },
+  localStorage: { values: {}, getItem(k) { return this.values[k] || null; }, setItem(k, v) { this.values[k] = v; } },
   sessionStorage: { removed: [], removeItem(k) { this.removed.push(k); } },
   document: {
     documentElement: {},
@@ -125,7 +135,7 @@ const ctx = {
   },
   $: (id) => findById(root, id),
   api: async (url, opts) => {
-    apiCalls.push({ url, body: JSON.parse(opts.body) });
+    apiCalls.push({ url, body: opts.body ? JSON.parse(opts.body) : null });
     if (!responses.length) throw new Error('unexpected extra api call to ' + url);
     return responses.shift();
   },
@@ -190,6 +200,10 @@ function offerState() {
     })),
     waitCalls: waitCalls.length, toasts, caught,
     applyInFlight: !!ctx._updateApplyInFlight,
+    applyOwner: ctx._updateApplyOwner,
+    tracking: ctx.localStorage.values,
+    finalErrorText: errorEl._text,
+    applyButton: {disabled: applyBtn.disabled, text: applyBtn.textContent},
   }));
 })().catch((error) => { console.error(error.stack || String(error)); process.exit(1); });
 """
@@ -415,11 +429,11 @@ _AGENT_BEHIND = {"agent": {"behind": 1}}
 
 
 def test_agent_target_confirmation_names_the_gateway_runs_too(tmp_path):
-    """#8667/#8746: an Agent update cycles the Gateway, so its copy says so."""
+    """Retained Gateway force-offer copy; not public Agent apply dispatch."""
 
     out = _run(
         {
-            "entry": "apply",
+            "entry": "force",
             "target": "agent",
             "updateData": _AGENT_BEHIND,
             "responses": [
@@ -433,12 +447,14 @@ def test_agent_target_confirmation_names_the_gateway_runs_too(tmp_path):
                 {"ok": True, "target": "agent"},
             ],
             "clickOffer": True,
-            "confirmAnswers": [True],
+            "confirmAnswers": [True, True],
         },
         tmp_path,
     )
     assert out["afterRefusal"]["offer"]["label"] == "Update anyway (interrupts 2 runs)"
-    assert out["confirmCalls"] == [
+    assert len(out["confirmCalls"]) == 2
+    assert out["confirmCalls"][0]["title"] == "Force update agent?"
+    assert out["confirmCalls"][1:] == [
         {
             "title": "Interrupt active runs?",
             "message": (
@@ -454,20 +470,20 @@ def test_agent_target_confirmation_names_the_gateway_runs_too(tmp_path):
         }
     ]
     assert out["apiCalls"] == [
-        {"url": "/api/updates/apply", "body": {"target": "agent"}},
+        {"url": "/api/updates/force", "body": {"target": "agent"}},
         # #8746: the forced request carries the confirmed Gateway restart impact
         # and interrupted-run count.
-        {"url": "/api/updates/apply", "body": {"target": "agent", "force_active_runs": True,
+        {"url": "/api/updates/force", "body": {"target": "agent", "force_active_runs": True,
                                                "gateway_restart_managed": True, "interrupted_runs": 2}},
     ]
 
 
 def test_agent_target_confirmation_external_gateway_wording(tmp_path):
-    """#8746: when Gateway is unmanaged, confirmation dialog uses external copy."""
+    """Retained unmanaged Gateway copy; not public Agent apply dispatch."""
 
     out = _run(
         {
-            "entry": "apply",
+            "entry": "force",
             "target": "agent",
             "updateData": _AGENT_BEHIND,
             "responses": [
@@ -481,12 +497,14 @@ def test_agent_target_confirmation_external_gateway_wording(tmp_path):
                 {"ok": True, "target": "agent"},
             ],
             "clickOffer": True,
-            "confirmAnswers": [True],
+            "confirmAnswers": [True, True],
         },
         tmp_path,
     )
     assert out["afterRefusal"]["offer"]["label"] == "Update anyway (interrupts 1 run)"
-    assert out["confirmCalls"] == [
+    assert len(out["confirmCalls"]) == 2
+    assert out["confirmCalls"][0]["title"] == "Force update agent?"
+    assert out["confirmCalls"][1:] == [
         {
             "title": "Interrupt active runs?",
             "message": (
@@ -500,12 +518,51 @@ def test_agent_target_confirmation_external_gateway_wording(tmp_path):
         }
     ]
     assert out["apiCalls"] == [
-        {"url": "/api/updates/apply", "body": {"target": "agent"}},
+        {"url": "/api/updates/force", "body": {"target": "agent"}},
         # #8746: the forced request carries the confirmed Gateway restart impact
         # and interrupted-run count.
-        {"url": "/api/updates/apply", "body": {"target": "agent", "force_active_runs": True,
+        {"url": "/api/updates/force", "body": {"target": "agent", "force_active_runs": True,
                                                "gateway_restart_managed": False, "interrupted_runs": 1}},
     ]
+
+
+@pytest.mark.parametrize("status", ["success", "refused", "unknown"])
+def test_agent_apply_uses_native_owner_and_matching_status_without_generic_force(tmp_path, status):
+    owner, action_id = "current-installation-default", "native-action-1"
+    out = _run(
+        {
+            "entry": "apply", "target": "agent",
+            # Stale offer ownership must not determine native submission ownership.
+            "updateData": {"agent": {"native": True, "update_available": True,
+                                      "can_apply": True, "owner": "stale-owner"}},
+            "responses": [
+                {"agent": {"owner": owner}},
+                {"status": "accepted", "action_id": action_id, "owner": owner},
+                {"status": status, "action_id": action_id, "message": "native outcome"},
+            ],
+        }, tmp_path,
+    )
+    assert out["apiCalls"] == [
+        {"url": "/api/updates", "body": None},
+        {"url": "/api/updates/apply", "body": {"target": "agent"}},
+        {"url": "/api/updates/agent/status", "body": {"action_id": action_id, "owner": owner}},
+    ]
+    assert out["applyOwner"] == "default"
+    assert {k for k in out["tracking"] if k.startswith("hermes-native-agent-action-")} == {
+        "hermes-native-agent-action-v2:" + owner,
+    }
+    tracking = json.loads(out["tracking"]["hermes-native-agent-action-v2:" + owner])
+    assert {k: tracking[k] for k in ("owner", "profile", "action_id", "status")} == {
+        "owner": owner, "profile": "default", "action_id": action_id, "status": status,
+    }
+    assert out["afterRefusal"]["offer"]["count"] == 0
+    assert out["confirmCalls"] == [] and out["waitCalls"] == 0
+    assert out["applyInFlight"] is False
+    assert "Agent: " + status in out["finalErrorText"]
+    assert out["applyButton"] == {
+        "disabled": status == "success",
+        "text": "Native update complete" if status == "success" else "Update Now",
+    }
 
 
 def test_webui_target_confirmation_keeps_the_webui_only_copy(tmp_path):
