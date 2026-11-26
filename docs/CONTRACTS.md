@@ -105,6 +105,10 @@ no machine-origin attestation. Historical text alone cannot establish authorship
   while an agent run is active. Start here for busy-composer behavior, pending
   queued messages, interrupt replacement, steer visibility, or leftover-steer
   recovery changes.
+- [`docs/architecture/run-journal-after-seq-index.md`](architecture/run-journal-after-seq-index.md):
+  current derived-index lifecycle for `after_seq` replay reads: when the bounded
+  offset index is used, which checks invalidate it, how append-only growth extends
+  it, and why failed-appends and regrowth require checkpoint-content validation.
 - [`docs/rfcs/README.md`](rfcs/README.md): RFC conventions and current RFC index.
 - [`docs/rfcs/session-sse-contract-v1.md`](rfcs/session-sse-contract-v1.md):
   proposed contract vocabulary, cursor/resume semantics, replay identity, snapshot
