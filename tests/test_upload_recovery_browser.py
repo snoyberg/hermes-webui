@@ -26,6 +26,7 @@ def test_upload_recovery_browser(width, tmp_path):
     html = re.sub(r"<link\b[^>]*>", "", html)
     script = _between(messages, "function _normalizeGoalContinuationId(", "\nfunction _bgTaskCompleteRingBufferAdd(")
     script += _between(messages, "const _uploadRecoveries=", "async function _recoverCompressedSend(")
+    script += _between(messages, "function _isSessionCurrentPane(sid) {", "\nfunction _isSessionActivelyViewed(")
     script += _between(messages, "async function send(){", "\nasync function startRegeneration(")
     script += ui[ui.index("async function uploadPendingFiles(options={})"):]
     script += _between((ROOT / "static/workspace.js").read_text(), "async function api(", "\nfunction recordClientSSEError(")
