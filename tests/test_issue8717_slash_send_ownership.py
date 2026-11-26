@@ -78,6 +78,7 @@ def _run(command: str, script_body: str, *, registry_error: bool = False, start_
           _clearStaleBusyStateBeforeSend(){{ return false; }},
           _clearComposerAfterQueuedSelectionSend(){{}},
           _chatPayloadModelState(){{ return {{ model: '', model_provider: '' }}; }},
+          uploadPendingFiles: async () => [],
           queueSessionMessage(){{}}, updateQueueBadge(){{}}, renderTray(){{}},
           showToast(){{}}, renderMessages(){{}}, renderSessionList(){{}},
           autoResize(){{}}, hideCmdDropdown(){{}}, syncTopbar(){{}},

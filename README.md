@@ -282,6 +282,10 @@ If chat submission has an unknown acknowledgement, the card offers Discard but
 not Retry: check the conversation before composing another send to avoid duplicates.
 This recovery applies to normal attachment sends, including recorded audio;
 active-run Steer and existing queued-message workflows are separate.
+Leaving the conversation before attachment admission retains the batch for explicit
+retry instead of starting it in the background. If admission succeeds after you
+navigate away, its stream remains bound to the original conversation for
+reattachment; it never replaces the stream or draft currently on screen.
 
 ### Profiles
 - Profile chip in the **composer footer** -- dropdown showing all profiles with gateway status and model info
