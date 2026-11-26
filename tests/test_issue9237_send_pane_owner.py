@@ -34,7 +34,9 @@ def _cut(start_marker: str, end_marker: str) -> str:
     return MESSAGES_JS[start:end]
 
 
-SEND_SRC = _cut("async function send(){", "\nasync function startRegeneration(")
+SEND_SRC = _cut("const _uploadRecoveries=", "async function _recoverCompressedSend(") + _cut(
+    "async function send(){", "\nasync function startRegeneration("
+)
 CURRENT_PANE_SRC = _cut("function _isSessionCurrentPane(sid) {", "\nfunction _isSessionActivelyViewed(")
 RECOVER_COMPRESSED_SRC = _cut(
     "async function _recoverCompressedSend(", "\nfunction _restoreComposerDraftAfterFailedSend("
@@ -237,7 +239,9 @@ async function newSession(){
 async function uploadPendingFiles(opts){
   rec('uploadPendingFiles', opts && opts.sessionId);
   maybeSwitch('upload');
-  return (opts && opts.files || []).map(f => ({name:f.name, path:'/ws/' + f.name}));
+  const uploaded=(opts && opts.files || []).map(f => ({name:f.name, path:'/ws/' + f.name}));
+  if(opts && opts.recoveryItems) opts.recoveryItems.forEach((item,i)=>{item.uploaded=uploaded[i];});
+  return uploaded;
 }
 let _forcedSkillDirectivePending = SC.directive ? {
   sessionId:'A',
@@ -283,6 +287,9 @@ __SEND__
     calls, startBody, composer: input.value, inflight: INFLIGHT, live: LIVE,
     session: S.session, messages: S.messages, activeStreamId: S.activeStreamId,
     busy: S.busy, sendInProgress: _sendInProgress,
+    recoveries: [..._uploadRecoveries.values()].map(r=>({sid:r.sid,profile:r.profile,
+      workspace:r.workspace,model:r.modelState,text:r.text,state:r.state,
+      files:r.items.map(item=>item.file.name)})),
   }));
 })().catch(error => { console.error(error && error.stack || error); process.exit(1); });
 """
@@ -361,29 +368,26 @@ def _assert_b_untouched(result):
 def test_switch_before_start_keeps_the_optimistic_turn_off_the_new_pane(switch_at):
     result = _run(files=True, directive=True, switchAt=switch_at)
     _assert_b_untouched(result)
-    # The turn still belongs to A, with A's transcript and the new user row.
-    a = result["inflight"]["A"]
-    assert [m["content"] for m in a["messages"]] == ["a-row", "hello"]
-    assert a["messages"][-1]["attachments"] == ["f.txt"]
-    saved = _named(result, "saveInflightState")
-    assert saved and {args[0] for args in saved} == {"A"}
-    # Persisted before /api/chat/start so a reload during the request keeps it.
-    assert saved[0] == ["A", None, ["a-row", "hello"]]
-    start_index = next(i for i, c in enumerate(result["calls"]) if c["name"] == "api.start")
-    assert any(c["name"] == "saveInflightState" for c in result["calls"][:start_index])
+    # Carried attachment policy: leaving before admission retains Files for
+    # explicit Retry rather than silently starting a background attachment turn.
+    assert result["startBody"] is None
+    assert result["inflight"] == {}
+    _assert_retained_upload(result, "failed")
+
+
+def _assert_retained_upload(result, state):
+    assert result["recoveries"] == [{"sid": "A", "profile": "pa", "workspace": "/a",
+        "model": {"model": "model-a", "model_provider": "prov-a"},
+        "text": "hello", "state": state, "files": ["f.txt"]}]
+    assert _named(result, "_restoreComposerDraftAfterFailedSend") == []
+    assert _named(result, "queueSessionMessage") == []
 
 
 @pytest.mark.parametrize("switch_at", ["upload", "directive"])
-def test_switch_before_start_posts_the_owner_model_workspace_and_profile(switch_at):
+def test_switch_before_start_retains_the_owner_model_workspace_and_profile(switch_at):
     result = _run(files=True, directive=True, switchAt=switch_at)
-    body = result["startBody"]
-    assert body["session_id"] == "A"
-    assert body["model"] == "model-a"
-    assert body["model_provider"] == "prov-a"
-    assert body["workspace"] == "/a"
-    assert body["profile"] == "pa"
-    assert body["attachments"] == [{"name": "f.txt", "path": "/ws/f.txt"}]
-    assert body["message"].startswith("/use writer")
+    assert result["startBody"] is None
+    _assert_retained_upload(result, "failed")
 
 
 # ── /api/chat/start succeeded after the switch ──────────────────────────────
@@ -475,6 +479,11 @@ def _assert_master_queue_and_return(result):
 )
 def test_start_conflict_after_switch_queues_for_the_owner_and_reloads_it_as_master(scenario):
     result = _run(start="409-conflict", **scenario)
+    if scenario.get("files"):
+        assert result["startBody"] is None
+        _assert_b_untouched(result)
+        _assert_retained_upload(result, "failed")
+        return
     _assert_master_queue_and_return(result)
     if scenario.get("directive"):
         queued = _named(result, "queueSessionMessage")[0][1]
@@ -721,7 +730,9 @@ def test_control_zero_counts_still_mean_a_new_chat(counts):
 def test_a_never_started_chat_left_before_the_start_gets_the_new_chat_notice(start):
     result = _run(files=True, switchAt="upload", start=start, ownerTitle="Untitled", ownerMessages=[])
     _assert_b_untouched(result)
-    assert _toasts(result) == [[NEW_CHAT, None, "error"]]
+    assert result["startBody"] is None
+    assert _toasts(result) == []
+    _assert_retained_upload(result, "failed")
 
 
 @pytest.mark.parametrize(
@@ -829,34 +840,36 @@ def test_control_slash_sends_without_a_switch_start_where_master_starts_them(sce
 
 
 
-# A rotation restores for the issuing chat exactly as master does, wherever the
-# user is (the server keeps a compressed chat's draft with its continuation).
-# Files staged on an on-screen continuation stay its own; they are not merged.
+# An attachment admission failure retains its original Files in page memory;
+# never replay an ambiguous admission or merge them into a continuation's draft.
 @pytest.mark.parametrize("kind", ["plain", "continuation", "chain", "cleared", "loading"])
 def test_rotated_restore_is_for_the_issuing_chat_as_on_master(kind):
     scenario = {"switchAt": "start", "start": "409-rotated", "files": True}
     if kind != "plain":
         scenario["switchKind"] = kind
     result = _run(**scenario)
-    assert _named(result, "_restoreComposerDraftAfterFailedSend") == [["hello", "A"]], kind
-    assert _named(result, "restore.files") == [["A", ["f.txt"]]], kind
+    _assert_retained_upload(result, "uncertain")
+    assert _named(result, "restore.files") == []
 
 
 def test_rotated_failure_leaves_the_on_screen_continuation_and_its_staged_files_alone():
     result = _run(switchAt="start", switchKind="continuation", start="409-rotated", files=True,
                   a2Text="my own words", a2Staged=[{"name": "f.txt"}])
     assert result["composer"] == "my own words"
-    assert _named(result, "restore.files") == [["A", ["f.txt"]]]
-    assert _toasts(result) == [[_failed_rotated("\u201cChat A\u201d", "boom"), None, "error"]]
+    _assert_retained_upload(result, "uncertain")
+    assert _named(result, "restore.files") == []
+    assert _toasts(result) == []
 
 
 def test_rotated_restore_to_a_continuation_off_screen_passes_only_the_snapshot():
     """On B with b.txt staged, a rotation to A2 (not on screen) keeps A's text and file as A's draft."""
     result = _run(switchAt="start", start="409-rotated", files=True, bStaged=True)
-    assert _named(result, "restore.files") == [["A", ["f.txt"]]]
+    _assert_retained_upload(result, "uncertain")
+    assert _named(result, "restore.files") == []
 
 
 def test_failed_start_restore_into_the_issuing_chat_passes_only_the_snapshot():
     """B's staged files are B's: a failure for A never hands them to A's draft."""
     result = _run(switchAt="start", start="500", files=True, bStaged=True)
-    assert _named(result, "restore.files") == [["A", ["f.txt"]]]
+    _assert_retained_upload(result, "uncertain")
+    assert _named(result, "restore.files") == []

@@ -2387,8 +2387,11 @@ async function send(){
     if(uploadRecovery){
       const stillVisible=_uploadRecoveryOwnerVisible(uploadRecovery);
       _releaseUploadRecovery(uploadRecovery);uploadRecovery=null;
-      // Navigation wins the pane; the server owns the accepted background turn.
-      if(!stillVisible)return;
+      // Navigation wins the pane; retain the accepted stream for owner reattachment.
+      if(!stillVisible){
+        if(INFLIGHT[activeSid]){INFLIGHT[activeSid].streamId=startData.stream_id;INFLIGHT[activeSid].reattach=true;}
+        return;
+      }
     }
   }catch(e){
     const errMsg=String((e&&e.message)||'');
