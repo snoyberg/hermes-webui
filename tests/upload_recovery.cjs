@@ -15,6 +15,7 @@ function between(source, start, end) {
   return source.slice(a,b);
 }
 const sendSource=between(messages,'async function send(){','\nasync function startRegeneration(');
+const paneSource=between(messages,'function _isSessionCurrentPane(sid) {','\nfunction _isSessionActivelyViewed(');
 const goalSource=between(messages,'function _normalizeGoalContinuationId(','\nfunction _bgTaskCompleteRingBufferAdd(');
 const restoreSource=between(messages,'function _restoreComposerDraftAfterFailedSend(','\nasync function send(');
 const uploadSource=ui.slice(ui.indexOf('async function uploadPendingFiles(options={})'));
@@ -76,7 +77,7 @@ async function runCase(name, options={}) {
     },
   };
   vm.createContext(context);
-  vm.runInContext(goalSource+'\n'+between(messages,'const _uploadRecoveries=','async function _recoverCompressedSend(')+restoreSource+'\n'+uploadSource+'\n'+sendSource+'\n'+rawSource,context);
+  vm.runInContext(paneSource+'\n'+goalSource+'\n'+between(messages,'const _uploadRecoveries=','async function _recoverCompressedSend(')+restoreSource+'\n'+uploadSource+'\n'+sendSource+'\n'+rawSource,context);
   if(options.restoredToken) context._setRestoredGoalContinuationDraft(options.restoredToken,input.value);
   if(options.realApi)vm.runInContext(apiSource,context);
   if(options.setup) await options.setup({context,S,input,state,file,second});
