@@ -17,6 +17,9 @@ import re
 import shutil
 import subprocess
 import sys
+from html import unescape
+from urllib.parse import quote
+from urllib.request import urlopen
 from pathlib import Path
 
 import pytest
@@ -72,6 +75,7 @@ function extractFunc(name) {
 eval(extractFunc('_matchBacktickFenceLine'));
 eval(extractFunc('_isBacktickFenceClose'));
 eval(extractFunc('_mediaTokenParts'));
+if (src.includes('function _webuiArtifactLinkHref(')) eval(extractFunc('_webuiArtifactLinkHref'));
 eval(extractFunc('renderMd'));
 
 let buf = '';
@@ -102,6 +106,45 @@ def _render(driver_path, markdown: str) -> str:
         raise RuntimeError(f"node driver failed: {result.stderr}")
     return result.stdout
 
+
+
+@pytest.mark.parametrize(('destination', 'expected'), [
+    ('/home/example/work/report%20%23%25.pdf', 'api/media?path=%2Fhome%2Fexample%2Fwork%2Freport%20%23%25.pdf'),
+    ('sandbox:/home/example/work/report.zip', 'api/media?path=%2Fhome%2Fexample%2Fwork%2Freport.zip'),
+    ('/api/media?path=%2Ftmp%2Freport.csv&download=1', 'api/media?path=%2Ftmp%2Freport.csv&amp;download=1'),
+    ('/api/file/raw?session_id=example&path=report.md&download=1', 'api/file/raw?session_id=example&amp;path=report.md&amp;download=1'),
+])
+def test_webui_artifact_links_in_prose_lists_and_tables(driver_path, destination, expected):
+    link = f'[Get the file]({destination})'
+    html = _render(driver_path, f'{link}\n\n- {link}\n\n| File |\n|---|\n| {link} |')
+    assert html.count(f'href="{expected}"') == 3, html
+
+
+def test_webui_artifact_links_do_not_rewrite_code_or_other_urls(driver_path):
+    html = _render(driver_path, '`[example](/tmp/one.zip)`\n\n'
+                   '[other route](/settings) [external](https://example.org/tmp/one.zip) '
+                   '[network](//tmp/one.zip) ![not a link](/tmp/one.zip)')
+    assert '<code>[example](/tmp/one.zip)</code>' in html
+    assert 'href="https://example.org/tmp/one.zip"' in html
+    assert 'api/media?' not in html
+
+
+def test_rendered_artifact_href_downloads_exact_bytes(driver_path):
+    from tests._pytest_port import BASE
+    from tests.conftest import TEST_WORKSPACE
+
+    artifact = TEST_WORKSPACE / 'link probe # 100%.txt'
+    payload = b'WebUI download regression\n'
+    artifact.write_bytes(payload)
+    try:
+        output = _render(driver_path, f'[Download](sandbox:{quote(artifact.as_posix())})')
+        href = re.search(r'href="([^"]+)"', output)
+        assert href, output
+        with urlopen(f'{BASE}/{unescape(href[1])}', timeout=5) as response:
+            assert response.headers['Content-Disposition'].startswith('attachment')
+            assert response.read() == payload
+    finally:
+        artifact.unlink()
 
 
 class TestSessionInternalLinks:
