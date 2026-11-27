@@ -27,6 +27,7 @@ function extractFrom(path, name) {
   while (depth > 0 && i < src.length) { if (src[i] === '{') depth++; else if (src[i] === '}') depth--; i++; }
   return src.slice(start, i);
 }
+eval(extractFrom(process.argv[1], '_webuiArtifactLinkHref'));
 eval(extractFrom(process.argv[1], '_markdownHref'));
 eval(extractFrom(process.argv[2], '_smdLinkHref'));
 const cases = JSON.parse(process.argv[3]);
@@ -87,6 +88,21 @@ def test_local_paths_unchanged(results):
     assert _path(results["file:///tmp/a%23b.png"]["settled"]) == "/tmp/a#b.png"
     assert _path(results["file:///home/me/my%20report.png"]["settled"]) == "/home/me/my report.png"
     assert _path(results["file://localhost/C:/x.png"]["settled"]) == "/C:/x.png"
+
+
+@pytest.mark.parametrize(('case', 'expected'), [
+    ('/home/example/report%20%23%25.zip', 'api/media?path=%2Fhome%2Fexample%2Freport%20%23%25.zip'),
+    ('sandbox:/mnt/data/report.zip', 'api/media?path=%2Fmnt%2Fdata%2Freport.zip'),
+    ('/api/file/raw?session_id=x&path=report.zip', 'api/file/raw?session_id=x&path=report.zip'),
+    ('/settings/profile', '/settings/profile'),
+])
+def test_streaming_artifact_converter(case, expected):
+    assert NODE is not None
+    proc = subprocess.run(
+        [NODE, '-e', _DRIVER, str(REPO / 'static' / 'ui.js'), str(REPO / 'static' / 'messages.js'), json.dumps([case])],
+        capture_output=True, text=True, timeout=30, check=True,
+    )
+    assert json.loads(proc.stdout)[case]['streaming'] == expected
 
 
 def test_empty_delimiters_are_kept(results):
