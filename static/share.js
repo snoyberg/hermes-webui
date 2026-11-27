@@ -288,7 +288,7 @@ function _shareRenderMessages(messages){
     row.dataset.role=String(msg.role||'assistant');
     const source=String(msg.content||'');
     const bodyHtml=(typeof renderMd==='function')
-      ? renderMd(source)
+      ? renderMd(source,false)
       : `<p>${_shareEscapeHtml(source)}</p>`;
     row.innerHTML=
       `<div class="share-role"><span class="share-role-badge">${_shareEscapeHtml(_shareRoleLabel(msg.role))}</span></div>`+
