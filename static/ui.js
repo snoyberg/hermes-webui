@@ -10853,7 +10853,22 @@ function _stripVisibleAssistantEchoFromThinking(thinkingText, ...visibleTexts){
   return clean;
 }
 
-function renderMd(raw){
+// Translate only recognisable artifact destinations, not arbitrary site paths.
+// This is URL formatting; the existing file routes still authorize every read.
+function _webuiArtifactLinkHref(raw){
+  const href=String(raw||'');
+  if(/^\/?api\/(?:media|file\/raw)\?/i.test(href)) return href.replace(/^\//,'');
+  const sandbox=/^sandbox:\/(?=[^/\\])/i.test(href);
+  if(!sandbox&&!/^\/(?:home|Users|tmp|var\/tmp|private\/tmp|mnt|media)\//.test(href)) return null;
+  const path=sandbox?href.slice('sandbox:'.length):href;
+  if(/[\x00-\x1f\x7f\\]/.test(path)) return null;
+  let decoded=path;
+  try{ decoded=decodeURIComponent(path); }catch(_){}
+  if(!/^\/(?![/\\])/.test(decoded)||/[\x00-\x1f\x7f\\]/.test(decoded)) return null;
+  return 'api/media?path='+encodeURIComponent(decoded);
+}
+
+function renderMd(raw, allowArtifactLinks=true){
   // Raw NULs become U+FFFD (what a browser shows for a NUL in text) before any
   // stash token is generated, so input text can never spell a token.
   let s=(raw||'').replace(/\x00/g,'\uFFFD').replace(/\r\n/g,'\n').replace(/\r/g,'\n');
@@ -10887,7 +10902,7 @@ function renderMd(raw){
       // Recursive call: full pipeline on stripped content. Handles fenced
       // code, headings, hr, ordered/unordered lists, nested blockquotes
       // (>>) — anything that renderMd handles at the top level.
-      const rendered=renderMd(stripped);
+      const rendered=renderMd(stripped,allowArtifactLinks);
       _bq_stash.push('<blockquote>'+rendered+'</blockquote>');
       // Surround the token with blank lines so the paragraph splitter
       // isolates it as its own chunk (otherwise the token gets wrapped
@@ -11237,7 +11252,7 @@ function renderMd(raw){
     t=t.replace(/\x00C(\d+)\x00/g,(_,i)=>_code_stash[+i]);
     // Stash [label](url) links before autolink so the URL in href= is not re-linked
     const _link_stash=[];
-    t=t.replace(/\[([^\]]+)\]\(((?:https?:\/\/|file:\/\/|workspace:\/\/|session:\/\/|mailto:|tel:|message:)[^\s\)]+)\)/g,(_,lb,u)=>{_link_stash.push(_markdownAnchor(lb,u));return `\x00L${_link_stash.length-1}\x00`;});
+    t=_replaceMarkdownLinks(t,html=>{_link_stash.push(html);return `\x00L${_link_stash.length-1}\x00`;});
     // Autolink only the text between tags, as the block pass below does: set
     // aside complete links, images and pre blocks and every other tag, then
     // turn a raw tag left without its closing ">" on its line into text by
@@ -11474,7 +11489,7 @@ function renderMd(raw){
   // Stash existing <a> tags first to avoid re-linking already-linked URLs.
   const _a_stash=[];
   s=s.replace(/(<a\b[^>]*>[\s\S]*?<\/a>)/g,m=>{_a_stash.push(m);return `\x00A${_a_stash.length-1}\x00`;});
-  s=s.replace(/\[([^\]]+)\]\(((?:https?:\/\/|file:\/\/|workspace:\/\/|session:\/\/|mailto:|tel:|message:)[^\s\)]+)\)/g,(_,label,url)=>_markdownAnchor(label,url));
+  s=_replaceMarkdownLinks(s,html=>html);
   s=s.replace(/\x00A(\d+)\x00/g,(_,i)=>_a_stash[+i]);
   // Restore raw <pre> only after markdown rewrites so literal preformatted
   // content stays placeholder-protected, then let the sanitizer normalize tags.
@@ -11493,6 +11508,17 @@ function renderMd(raw){
     // there. No attribute legitimately carries one: drop them, and any stray \x00.
     return String(v||'').replace(/\x00[^\x00]*\x00/g,'').replace(/\x00/g,'')
       .replace(/&quot;/g,'"').replace(/&#39;/g,"'").replace(/&amp;/g,'&').trim();
+  }
+  function _replaceMarkdownLinks(text,emit){
+    return text.replace(/<code\b[^>]*>[\s\S]*?<\/code>|(!?)\[([^\]\n]+)\]\(([^\s<>\)]+)\)/g,(whole,image,label,url)=>{
+      if(!url) return whole;  // literal code span
+      if(/^(?:https?:\/\/|file:\/\/|workspace:\/\/|session:\/\/|mailto:|tel:|message:)/.test(url)){
+        return (image||'')+emit(_markdownAnchor(label,url));
+      }
+      if(image||!allowArtifactLinks||typeof _webuiArtifactLinkHref!=='function') return whole;
+      const artifactHref=_webuiArtifactLinkHref(url);
+      return artifactHref?emit(_markdownAnchor(label,url,artifactHref)):whole;
+    });
   }
   function _markdownHref(raw){
     const href=String(raw||'').replace(/"/g,'%22');
@@ -11561,10 +11587,10 @@ function renderMd(raw){
     });
     return esc(tokenized).replace(/\x00H(\d+)\x00/g,(_,i)=>_label_stash[+i]);
   }
-  function _markdownAnchor(label,rawUrl){
-    const href=_markdownHref(rawUrl);
+  function _markdownAnchor(label,rawUrl,artifactHref){
+    const href=artifactHref||_markdownHref(rawUrl);
     const internal=/^session:\/\//i.test(String(rawUrl||'')) || _isInternalSessionHref(href);
-    return `<a${internal?' class="session-link"':''} href="${href}"${internal?'':' target="_blank" rel="noopener"'}>${_markdownLabelHtml(label)}</a>`;
+    return `<a${internal?' class="session-link"':''} href="${esc(href)}"${internal?'':' target="_blank" rel="noopener"'}>${_markdownLabelHtml(label)}</a>`;
   }
   function _isSafeUrl(v, img){
     const raw=_safeAttrValue(v);
